@@ -97,7 +97,16 @@
       beatPriceValue.textContent = Number.isFinite(beat) ? D.fmtBtcUsd(beat) : '—';
     }
     if (beatSource) {
-      beatSource.textContent = Number.isFinite(beat) ? beatSourceLabel(s.priceToBeatSource) : 'Waiting for window…';
+      if (Number.isFinite(beat)) {
+        beatSource.textContent = beatSourceLabel(s.priceToBeatSource);
+      } else if (Number.isFinite(s.windowStartTime)) {
+        const until = s.windowStartTime - Date.now();
+        beatSource.textContent = until > 0
+          ? `Opens in ${D.fmtCountdown(until) || '…'}`
+          : 'Strike loading…';
+      } else {
+        beatSource.textContent = 'Waiting for market…';
+      }
     }
     if (beatBtcNow) {
       beatBtcNow.textContent = Number.isFinite(s.btcSpot) ? D.fmtBtcUsd(s.btcSpot) : '—';
@@ -182,6 +191,7 @@
 
   setInterval(() => {
     updateResolutionCountdown();
+    renderBeatPrice();
   }, 1000);
 
   renderPrimary();

@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Docs · Polymarket BTC Bot</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/docs/docs.css" />
+</head>
+<body data-page="docs">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Documentation</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="status-bar" style="grid-column: 3; grid-row: 1;">
+      <span class="pill on">Reference</span>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar" aria-label="On this page">
+      <h2>Start</h2>
+      <a href="#overview">Overview</a>
+      <a href="#quick-start">Quick start</a>
+      <a href="#prerequisites">Prerequisites</a>
+      <h2>Configure</h2>
+      <a href="#env-vars">Environment variables</a>
+      <a href="#npm-scripts">npm scripts</a>
+      <h2>Dashboard</h2>
+      <a href="#dashboard-pages">Dashboard pages</a>
+      <a href="#paper-trading">Paper trading</a>
+      <a href="#strategies">Strategies</a>
+      <h2>Feeds</h2>
+      <a href="#nats-vs-direct">NATS vs direct</a>
+      <a href="#rust-feeds">Rust feeds-rs</a>
+      <h2>Backtest</h2>
+      <a href="#backtest">Backtest 5m / 15m</a>
+      <h2>Help</h2>
+      <a href="#troubleshooting">Troubleshooting</a>
+      <a href="#maintenance">Keeping docs updated</a>
+    </aside>
+
+    <article class="docs-content">
+      <section id="overview">
+        <h2>Overview</h2>
+        <p>
+          This project is a <strong>paper-trading bot</strong> for Polymarket BTC short-window markets (5-minute and 15-minute “up or down” windows).
+          It streams Binance BTC prices and Polymarket CLOB data, runs signal strategies, and exposes a local dashboard for monitoring and control.
+        </p>
+        <p>Main components:</p>
+        <ul>
+          <li><code>bot.js</code> — live polling loop (hard-locked to paper mode)</li>
+          <li><code>dashboard/server.js</code> — HTTP + WebSocket UI on port <code>3847</code> by default</li>
+          <li><code>backtest/engine.js</code> — historical simulation on resolved markets</li>
+          <li><code>feeds/natsPublisher.js</code> — Node publisher to NATS (optional)</li>
+          <li><code>rust/feeds-rs</code> — low-latency Rust NATS publisher (optional)</li>
+          <li><code>signals/</code> — strategies and edge-case detectors</li>
+          <li><code>risk/manager.js</code> — Kelly sizing, liquidity gates, circuit breaker</li>
+        </ul>
+        <div class="docs-callout ok">
+          Docs URL when the dashboard is running: <code>http://localhost:3847/docs</code> (or your <code>DASHBOARD_PORT</code>).
+        </div>
+      </section>
+
+      <section id="quick-start">
+        <h2>Quick start</h2>
+        <ol>
+          <li>Clone the repo and install dependencies:</li>
+        </ol>
+        <pre>cd polymarket_bot
+npm install
+cp .env.example .env</pre>
+        <ol start="2">
+          <li>Edit <code>.env</code> — for the simplest path, keep <code>NATS_URL=disabled</code> and <code>USE_NATS=false</code>.</li>
+          <li>Start the dashboard:</li>
+        </ol>
+        <pre>npm run dashboard</pre>
+        <p>Open <a href="/live">/live</a> at <code>http://localhost:3847/live</code>.</p>
+        <ol start="4">
+          <li>Optional — run dashboard + bot together:</li>
+        </ol>
+        <pre>npm run dev</pre>
+        <p>Or start/stop the bot from the <a href="/bot">Bot</a> page in the UI.</p>
+      </section>
+
+      <section id="prerequisites">
+        <h2>Prerequisites</h2>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead>
+              <tr><th>Tool</th><th>Required</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><strong>Node.js</strong></td><td>Yes</td><td>LTS recommended (v18+). All npm scripts use Node.</td></tr>
+              <tr><td><strong>npm</strong></td><td>Yes</td><td><code>npm install</code> installs <code>ethers</code>, <code>nats</code>, <code>ws</code>.</td></tr>
+              <tr><td><strong>Docker</strong></td><td>Optional</td><td>For <code>npm run nats:up</code> / <code>dev:nats</code> (NATS broker via <code>docker compose</code>).</td></tr>
+              <tr><td><strong>Rust / cargo</strong></td><td>Optional</td><td>Only if you build <code>rust/feeds-rs</code> for NATS feed publishing.</td></tr>
+              <tr><td><strong>Wallet / RPC</strong></td><td>Optional</td><td>Paper mode does not require <code>PRIVATE_KEY</code>. RPC improves Chainlink polling when set.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="env-vars">
+        <h2>Environment variables</h2>
+        <p>Copy <code>.env.example</code> to <code>.env</code>. Variables below reflect the current codebase.</p>
+
+        <h3>Core mode</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>PAPER_TRADE</code></td><td><code>true</code></td><td>Bot ignores <code>false</code> — live trading is hard-disabled in <code>bot.js</code>.</td></tr>
+              <tr><td><code>STARTING_BANKROLL</code></td><td><code>20</code> (example)</td><td>Initial paper bankroll in USDC (bot/dashboard).</td></tr>
+              <tr><td><code>MARKET_WINDOW</code></td><td><code>15</code></td><td><code>5</code>, <code>15</code>, or <code>both</code> — which BTC short windows to trade/watch.</td></tr>
+              <tr><td><code>BOT_STRATEGY</code></td><td><code>deterministic_yes_50</code></td><td>Strategy id when starting bot from CLI or dashboard spawn.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Wallet / execution</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>PRIVATE_KEY</code></td><td>—</td><td>Polygon wallet key; optional in paper mode.</td></tr>
+              <tr><td><code>POLYGON_RPC</code></td><td><code>https://polygon-rpc.com</code></td><td>Used for Chainlink polling when reachable.</td></tr>
+              <tr><td><code>POLY_API_KEY</code></td><td>—</td><td>Reserved for future authenticated Polymarket API use.</td></tr>
+              <tr><td><code>POLY_API_SECRET</code></td><td>—</td><td>Same.</td></tr>
+              <tr><td><code>POLY_API_PASSPHRASE</code></td><td>—</td><td>Same.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Feeds</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>BINANCE_WS_URL</code></td><td>Binance BTC aggTrade</td><td>WebSocket URL for BTC spot ticks.</td></tr>
+              <tr><td><code>ORDERBOOK_POLL_MS</code></td><td><code>1000</code> (Rust)</td><td>Orderbook REST interval in <code>feeds-rs</code>; dashboard uses <code>2500</code> ms internally.</td></tr>
+              <tr><td><code>MARKET_REFRESH_MS</code></td><td><code>45000</code></td><td>How often to rediscover active Gamma markets.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Dashboard</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>DASHBOARD_PORT</code></td><td><code>3847</code></td><td>HTTP + WebSocket port for the UI.</td></tr>
+              <tr><td><code>ENABLE_DASHBOARD_FEED</code></td><td><code>true</code></td><td>Bot POSTs trade events to <code>/api/bot-event</code> when true.</td></tr>
+              <tr><td><code>DEBUG_POLY_STREAM</code></td><td>off</td><td>Verbose Polymarket stream logs on the dashboard server.</td></tr>
+              <tr><td><code>DASHBOARD_POLY_MODE</code></td><td>from <code>MARKET_WINDOW</code></td><td>Initial UI window filter: <code>5m</code>, <code>15m</code>, or <code>both</code>.</td></tr>
+              <tr><td><code>POLY_WS_THROTTLE_MS</code></td><td><code>250</code></td><td>Min interval between WS price broadcasts (dashboard).</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>NATS messaging</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>NATS_URL</code></td><td><code>disabled</code> in example</td><td>Set to <code>nats://127.0.0.1:4222</code> to enable NATS. <code>disabled</code> turns NATS off entirely.</td></tr>
+              <tr><td><code>USE_NATS</code></td><td><code>false</code></td><td>Dashboard/bot NATS bridge when URL is not <code>disabled</code>.</td></tr>
+              <tr><td><code>USE_NATS_FEEDS</code></td><td>off</td><td>Dashboard ingests <code>feeds.&gt;</code> from NATS instead of direct CLOB/WS.</td></tr>
+              <tr><td><code>BOT_USE_NATS_FEEDS</code></td><td><code>false</code></td><td>Bot reads Binance ticks from NATS (needs publisher or feeds-rs).</td></tr>
+              <tr><td><code>NATS_CONNECT_TIMEOUT_MS</code></td><td><code>8000</code></td><td>Fail fast if broker is down (avoids hanging startup).</td></tr>
+              <tr><td><code>NATS_RECONNECT_MAX_MS</code></td><td><code>30000</code></td><td>Max reconnect backoff.</td></tr>
+              <tr><td><code>NATS_DEDUP_MS</code></td><td><code>400</code></td><td>Dedup window for duplicate NATS messages.</td></tr>
+              <tr><td><code>NATS_FEED_FALLBACK_MS</code></td><td><code>12000</code></td><td>If NATS feeds idle, dashboard starts direct ingest.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Backtest &amp; logging</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Variable</th><th>Default</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>BACKTEST_WINDOWS</code></td><td><code>200</code></td><td>Number of resolved windows to simulate.</td></tr>
+              <tr><td><code>MARKET_SEARCH_PAGES</code></td><td><code>12</code></td><td>Gamma API pagination for active markets.</td></tr>
+              <tr><td><code>RESOLVED_SEARCH_PAGES</code></td><td><code>20</code></td><td>Gamma pagination for resolved markets (backtest).</td></tr>
+              <tr><td><code>VERBOSE_TRADE_LOGS</code></td><td><code>true</code></td><td>Human-readable trade logs.</td></tr>
+              <tr><td><code>TRADE_LOG_JSON</code></td><td><code>true</code></td><td>Structured JSON trade log lines.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="npm-scripts">
+        <h2>npm scripts</h2>
+        <p>Run from the project root. Verify docs stay in sync with <code>npm run check:docs</code>.</p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Script</th><th>Command</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>dashboard</code></td><td><code>node dashboard/server.js</code></td><td>Dashboard only; direct Binance + Polymarket feeds (default NATS off).</td></tr>
+              <tr><td><code>dashboard:nats</code></td><td>env <code>USE_NATS=true USE_NATS_FEEDS=true</code></td><td>Dashboard expecting NATS feed ingest.</td></tr>
+              <tr><td><code>dev</code></td><td><code>node dashboard/run-dev.js</code></td><td>Dashboard + paper bot (<code>PAPER_TRADE</code>, dashboard feed on).</td></tr>
+              <tr><td><code>dev:nats</code></td><td><code>node dashboard/run-dev-nats.js</code></td><td>Docker NATS + <code>feeds:nats</code> + dashboard + bot with <code>BOT_USE_NATS_FEEDS</code>.</td></tr>
+              <tr><td><code>paper:live</code></td><td><code>PAPER_TRADE=true ENABLE_DASHBOARD_FEED=true node bot.js</code></td><td>Bot alone; push events to dashboard if it is running.</td></tr>
+              <tr><td><code>backtest</code></td><td><code>node backtest/engine.js</code></td><td>15m window backtest (or per <code>MARKET_WINDOW</code>).</td></tr>
+              <tr><td><code>backtest:5m</code></td><td><code>MARKET_WINDOW=5 node backtest/engine.js</code></td><td>Force 5-minute window backtest.</td></tr>
+              <tr><td><code>nats:up</code></td><td><code>docker compose up -d nats</code></td><td>Start NATS on ports <code>4222</code> (client) and <code>8222</code> (monitoring).</td></tr>
+              <tr><td><code>nats:down</code></td><td><code>docker compose down</code></td><td>Stop compose stack.</td></tr>
+              <tr><td><code>feeds:nats</code></td><td><code>node feeds/natsPublisher.js</code></td><td>Node publisher: Binance + Polymarket → NATS.</td></tr>
+              <tr><td><code>check:docs</code></td><td><code>node scripts/check-docs-stale.js</code></td><td>Warn if <code>package.json</code> scripts differ from docs.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Rust feeds-rs (manual)</h3>
+        <pre>cd rust/feeds-rs
+cargo build --release
+export NATS_URL=nats://127.0.0.1:4222
+export MARKET_WINDOW=15
+./target/release/feeds-rs</pre>
+        <p>See <code>rust/feeds-rs/README.md</code> for subjects and latency notes.</p>
+      </section>
+
+      <section id="dashboard-pages">
+        <h2>Dashboard pages</h2>
+        <p>Base URL: <code>http://localhost:3847</code> (unless <code>DASHBOARD_PORT</code> is changed). WebSocket: <code>ws://localhost:3847/ws</code>.</p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Route</th><th>Page</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>/</code>, <code>/live</code></td><td>Live</td><td>Split view: Polymarket prices/trades + Binance BTC stream; market window selector in header.</td></tr>
+              <tr><td><code>/orderbook</code></td><td>Orderbook</td><td>YES/NO bid/ask ladders and depth for the primary active market.</td></tr>
+              <tr><td><code>/bot</code></td><td>Bot</td><td>Start/stop paper bot, pick strategy, view bankroll, logs, and open positions.</td></tr>
+              <tr><td><code>/markets</code></td><td>Markets</td><td>Active BTC 5m/15m markets list from Gamma (filtered by header window mode).</td></tr>
+              <tr><td><code>/backtest</code></td><td>Backtest</td><td>CLI command cheat sheet (results are terminal-only today).</td></tr>
+              <tr><td><code>/docs</code></td><td>Docs</td><td>This documentation.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>HTTP API (dashboard server)</h3>
+        <ul>
+          <li><code>GET /api/bot/status</code> — bot state, strategy list</li>
+          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> child process</li>
+          <li><code>GET /api/bot/strategies</code> / <code>POST /api/bot/strategy</code> — list or set strategy</li>
+          <li><code>GET /api/polymarket/mode</code> / <code>POST /api/polymarket/mode</code> — 5m / 15m / both filter</li>
+          <li><code>POST /api/bot-event</code> — bot trade events (when not using NATS for events)</li>
+        </ul>
+      </section>
+
+      <section id="paper-trading">
+        <h2>Live paper trading</h2>
+        <p>The bot always runs in <strong>paper mode</strong>. It polls every 30 seconds, tracks Binance momentum, reads Polymarket midpoints, and simulates entries/exits.</p>
+        <h3>From the dashboard</h3>
+        <ol>
+          <li>Run <code>npm run dashboard</code> (or <code>npm run dev</code>).</li>
+          <li>Open <a href="/bot">/bot</a>.</li>
+          <li>Select a strategy, click <strong>Start</strong>. Logs and bankroll update over WebSocket.</li>
+          <li>Use <strong>Stop</strong> to SIGTERM the child process (SIGKILL after 6s if needed).</li>
+        </ol>
+        <h3>From the terminal</h3>
+        <pre>npm run paper:live
+# or with strategy / bankroll:
+BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
+        <p>With <code>ENABLE_DASHBOARD_FEED=true</code>, trade events appear on the Bot page while the dashboard is up.</p>
+        <h3>Trading windows (bot)</h3>
+        <ul>
+          <li><strong>5m markets</strong>: trades only when 30–270 seconds remain in the window.</li>
+          <li><strong>15m markets</strong>: trades when 60–840 seconds remain.</li>
+        </ul>
+      </section>
+
+      <section id="strategies">
+        <h2>Strategies</h2>
+        <p>Defined in <code>signals/strategies_runtime.js</code>. The dashboard lists all three; the backtest engine currently simulates the deterministic YES ≥ 0.50 rule.</p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>ID</th><th>Label</th><th>Entry rule</th><th>Stop</th></tr></thead>
+            <tbody>
+              <tr><td><code>deterministic_yes_50</code></td><td>Deterministic YES &gt;= 0.50</td><td>YES midpoint ≥ 0.50</td><td>0.45</td></tr>
+              <tr><td><code>conservative_yes_55</code></td><td>Conservative YES &gt;= 0.55</td><td>YES midpoint ≥ 0.55</td><td>0.50</td></tr>
+              <tr><td><code>momentum_confirmed_yes_50</code></td><td>YES &gt;= 0.50 + momentum up</td><td>YES ≥ 0.50 and Binance short momentum up</td><td>0.46</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Additional signal logic lives in <code>signals/edgecases.js</code> (tiered edge cases used by the broader signal pipeline).</p>
+      </section>
+
+      <section id="nats-vs-direct">
+        <h2>NATS vs direct feeds</h2>
+        <h3>Direct mode (simplest)</h3>
+        <p><code>npm run dashboard</code> with <code>NATS_URL=disabled</code> or <code>USE_NATS=false</code>:</p>
+        <ul>
+          <li>Dashboard opens Binance WS and Polymarket CLOB WS directly in Node.</li>
+          <li>Orderbook via REST poll (~2.5s); midpoint fallback every 5s.</li>
+          <li>No Docker required.</li>
+        </ul>
+        <h3>NATS mode</h3>
+        <p>Use when you want decoupled publishers (Node or Rust) and multiple consumers:</p>
+        <ol>
+          <li><code>npm run nats:up</code> (or ensure NATS on <code>:4222</code>).</li>
+          <li>Set <code>NATS_URL=nats://127.0.0.1:4222</code>, <code>USE_NATS=true</code>, <code>USE_NATS_FEEDS=true</code>.</li>
+          <li>Run a publisher: <code>npm run feeds:nats</code> <em>or</em> <code>rust/feeds-rs</code> binary.</li>
+          <li>Start dashboard: <code>npm run dashboard:nats</code> or full stack <code>npm run dev:nats</code>.</li>
+        </ol>
+        <p>Subjects (see <code>lib/nats/subjects.js</code>): <code>feeds.binance.price</code>, <code>feeds.polymarket.price</code>, <code>feeds.polymarket.orderbook</code>, <code>feeds.polymarket.trades</code>, <code>feeds.polymarket.markets</code>, <code>bot.status</code>, <code>bot.events</code>, <code>bot.control</code>.</p>
+        <div class="docs-callout">
+          If NATS is enabled but no publisher is running, the header may show <strong>Polymarket waiting (NATS, no ticks)</strong>. After <code>NATS_FEED_FALLBACK_MS</code> the dashboard starts direct feeds automatically.
+        </div>
+      </section>
+
+      <section id="rust-feeds">
+        <h2>Rust feeds-rs</h2>
+        <p>High-performance alternative to <code>feeds/natsPublisher.js</code>. Publishes the same <code>feeds.*</code> subject family.</p>
+        <pre>cd rust/feeds-rs
+cargo build --release
+npm run nats:up
+export NATS_URL=nats://127.0.0.1:4222
+export MARKET_WINDOW=15   # or 5, both
+./target/release/feeds-rs</pre>
+        <p>Subscribe for debugging: <code>nats sub 'feeds.&gt;'</code> (requires NATS CLI). Monitoring UI when using project Docker: <code>http://localhost:8222</code>.</p>
+      </section>
+
+      <section id="backtest">
+        <h2>Backtest 5m / 15m</h2>
+        <p>The backtest engine loads resolved BTC short-window markets, fetches history (PolyBackTest API with CLOB fallback), and simulates the deterministic YES strategy.</p>
+        <pre># 15-minute windows (default)
+npm run backtest
+
+# 5-minute windows
+npm run backtest:5m
+
+# Custom sample size
+BACKTEST_WINDOWS=100 npm run backtest:5m</pre>
+        <p>Output includes win rate, P&amp;L, bankroll curve, and Sharpe ratio in the terminal. The <a href="/backtest">Backtest</a> dashboard page lists these commands but does not run the engine in-browser.</p>
+        <p><code>MARKET_WINDOW=both</code> uses 15m as the primary backtest window when multiple windows are allowed (see <code>getBacktestWindowMinutes()</code> in <code>backtest/engine.js</code>).</p>
+      </section>
+
+      <section id="troubleshooting">
+        <h2>Troubleshooting</h2>
+        <h3>Port already in use (3847)</h3>
+        <p>Another process is bound to the dashboard port. Either stop it or set <code>DASHBOARD_PORT=3848</code> in <code>.env</code> and restart.</p>
+        <h3>NATS / stack overflow or hang on startup</h3>
+        <p>If enabling NATS caused crashes or deep recursion in older setups, use the current defaults:</p>
+        <ul>
+          <li><code>NATS_URL=disabled</code> and <code>USE_NATS=false</code> for <code>npm run dashboard</code> only.</li>
+          <li><code>NATS_CONNECT_TIMEOUT_MS=8000</code> so a dead broker does not hang forever.</li>
+          <li>Dashboard falls back to direct feeds when NATS is unavailable or idle.</li>
+        </ul>
+        <h3>Polymarket waiting (NATS, no ticks)</h3>
+        <p>Start <code>npm run feeds:nats</code> or <code>feeds-rs</code>, or switch to direct mode (<code>USE_NATS_FEEDS=false</code>).</p>
+        <h3>WebSocket disconnected</h3>
+        <p>Confirm the dashboard is running and you are using the same port in the browser. Check firewall/VPN blocking localhost WS.</p>
+        <h3>No active BTC 5m/15m markets</h3>
+        <p>Markets expire quickly. Try <code>both</code> in the header selector or wait for the next window. Gamma API rate limits: adjust <code>MARKET_SEARCH_PAGES</code> if needed.</p>
+        <h3>Backtest: PolyBackTest unavailable</h3>
+        <p>The engine falls back to CLOB trade reconstruction automatically; runs may be slower.</p>
+        <h3>Bot will not start (409)</h3>
+        <p>Bot already running or still stopping — use Stop on the Bot page or kill the child PID shown in status.</p>
+      </section>
+
+      <section id="maintenance">
+        <h2>Keeping docs updated</h2>
+        <p>Developer checklist: <code>docs/MAINTENANCE.md</code> in the repo root. After changing scripts, env vars, routes, or strategies:</p>
+        <ol>
+          <li>Update <code>dashboard/public/docs/index.html</code> (this page).</li>
+          <li>Update <code>.env.example</code> if variables changed.</li>
+          <li>Run <code>npm run check:docs</code> before opening a PR.</li>
+        </ol>
+      </section>
+    </article>
+  </div>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+</body>
+</html>
