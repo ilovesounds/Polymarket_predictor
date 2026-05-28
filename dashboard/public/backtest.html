@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Backtest · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="backtest">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Backtest</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <label class="control-group" for="poly-mode-select">
+        <span class="control-label">Market window</span>
+        <select id="poly-mode-select" class="control-input">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="both">both</option>
+        </select>
+      </label>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+      <span id="bot-status" class="pill">Bot idle</span>
+    </div>
+  </header>
+
+  <main class="page-main">
+    <section class="card-panel page-panel backtest-panel">
+      <h2>Run backtest locally</h2>
+      <p class="backtest-lead">
+        Backtests run in the terminal via <code>backtest/engine.js</code> and print win rate, bankroll curve, and Sharpe to stdout.
+        The live dashboard does not embed results yet — use the commands below from the project root.
+      </p>
+      <div class="backtest-commands">
+        <div class="cmd-block">
+          <span class="mini-label">Default (15m window)</span>
+          <code>npm run backtest</code>
+        </div>
+        <div class="cmd-block">
+          <span class="mini-label">5-minute window</span>
+          <code>npm run backtest:5m</code>
+        </div>
+        <div class="cmd-block">
+          <span class="mini-label">Custom strategy / bankroll</span>
+          <code>BOT_STRATEGY=deterministic_yes_50 STARTING_BANKROLL=5 npm run backtest</code>
+        </div>
+      </div>
+      <p class="backtest-note">
+        After a run, compare metrics with paper trading on the <a href="/bot">Bot</a> page or watch live prices on <a href="/live">Live</a>.
+      </p>
+    </section>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+</body>
+</html>

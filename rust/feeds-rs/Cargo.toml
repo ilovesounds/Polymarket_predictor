@@ -1,0 +1,23 @@
+[package]
+name = "feeds-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Low-latency Binance + Polymarket feed publisher for polymarket_bot"
+
+[[bin]]
+name = "feeds-rs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-nats = "0.40"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+time = { version = "0.3", features = ["parsing"] }

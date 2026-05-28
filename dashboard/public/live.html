@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="live">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Live streams</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <label class="control-group" for="poly-mode-select">
+        <span class="control-label">Market window</span>
+        <select id="poly-mode-select" class="control-input">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="both">both</option>
+        </select>
+      </label>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+      <span id="bot-status" class="pill">Bot idle</span>
+    </div>
+  </header>
+
+  <main class="split">
+    <section class="panel card-panel" id="panel-polymarket">
+      <div class="panel-head">
+        <div class="panel-title-block">
+          <h2>Polymarket</h2>
+          <p class="market-title" id="poly-market-title">Waiting for market…</p>
+        </div>
+        <div class="panel-head-meta">
+          <span id="poly-resolution" class="resolution-pill" hidden>—</span>
+          <span class="meta" id="poly-meta">—</span>
+        </div>
+      </div>
+      <div class="beat-price-block" id="beat-price-block">
+        <div class="beat-price-head">
+          <span class="beat-label">Price to beat</span>
+          <span class="beat-source meta" id="beat-source">—</span>
+        </div>
+        <div class="beat-price-hero" id="beat-price-value">—</div>
+        <div class="beat-spot-row">
+          <div class="beat-spot">
+            <span class="mini-label">BTC now</span>
+            <span class="beat-spot-value" id="beat-btc-now">—</span>
+          </div>
+          <div class="beat-spot beat-spot-chainlink" id="beat-chainlink-wrap" hidden>
+            <span class="mini-label">Chainlink</span>
+            <span class="beat-spot-value" id="beat-chainlink-now">—</span>
+          </div>
+        </div>
+        <div class="beat-delta" id="beat-delta" aria-live="polite">—</div>
+      </div>
+      <div class="yes-no-grid">
+        <div class="outcome-card outcome-yes">
+          <div class="mini-label">YES</div>
+          <div class="price-display" id="poly-yes-price">—</div>
+        </div>
+        <div class="outcome-card outcome-no">
+          <div class="mini-label">NO</div>
+          <div class="price-display" id="poly-no-price">—</div>
+        </div>
+      </div>
+      <div class="sparkline-wrap"><canvas id="poly-spark" width="400" height="60"></canvas></div>
+      <div class="subsection flex-grow">
+        <div class="subsection-label">Stream log</div>
+        <div class="log" id="poly-log"></div>
+      </div>
+    </section>
+    <section class="panel card-panel" id="panel-binance">
+      <div class="panel-head">
+        <div class="panel-title-block">
+          <h2>Binance BTC/USDT</h2>
+          <p class="market-title muted-title">Spot aggregate trade</p>
+        </div>
+        <span class="meta" id="binance-meta">—</span>
+      </div>
+      <div class="price-display price-hero" id="binance-price">—</div>
+      <div class="sparkline-wrap"><canvas id="binance-spark" width="400" height="60"></canvas></div>
+      <div class="subsection flex-grow">
+        <div class="subsection-label">Stream log</div>
+        <div class="log" id="binance-log"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/pages/live.js"></script>
+</body>
+</html>

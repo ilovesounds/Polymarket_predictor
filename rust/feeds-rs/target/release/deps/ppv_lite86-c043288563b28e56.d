@@ -1,0 +1,10 @@
+/Users/shrianshjaiswal/Desktop/polymarket_bot/rust/feeds-rs/target/release/deps/ppv_lite86-c043288563b28e56.d: /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/lib.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/soft.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/generic.rs
+
+/Users/shrianshjaiswal/Desktop/polymarket_bot/rust/feeds-rs/target/release/deps/libppv_lite86-c043288563b28e56.rlib: /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/lib.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/soft.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/generic.rs
+
+/Users/shrianshjaiswal/Desktop/polymarket_bot/rust/feeds-rs/target/release/deps/libppv_lite86-c043288563b28e56.rmeta: /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/lib.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/soft.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs /Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/generic.rs
+
+/Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/lib.rs:
+/Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/soft.rs:
+/Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/types.rs:
+/Users/shrianshjaiswal/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/generic.rs:

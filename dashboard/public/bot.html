@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bot · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="bot">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Bot control</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <label class="control-group" for="poly-mode-select">
+        <span class="control-label">Market window</span>
+        <select id="poly-mode-select" class="control-input">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="both">both</option>
+        </select>
+      </label>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+      <span id="bot-status" class="pill">Bot idle</span>
+    </div>
+  </header>
+
+  <main class="page-main bot-page">
+    <section class="card-panel page-panel bot-controls-panel">
+      <h2>Controls</h2>
+      <div class="bot-controls-grid">
+        <label class="control-group" for="bot-strategy-select">
+          <span class="control-label">Strategy</span>
+          <select id="bot-strategy-select" class="control-input"></select>
+        </label>
+        <div class="control-group">
+          <span class="control-label">Actions</span>
+          <div class="btn-row">
+            <button id="bot-start-btn" type="button" class="btn btn-primary">Start bot</button>
+            <button id="bot-stop-btn" type="button" class="btn btn-danger">Stop bot</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <span class="control-label">Tracked bankroll</span>
+          <strong id="bot-bankroll" class="bankroll-value">$—</strong>
+        </div>
+        <div class="control-group">
+          <span class="control-label">PID / mode</span>
+          <span class="meta-inline"><span id="bot-pid">—</span> · <span id="bot-mode">paper</span></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card-panel page-panel">
+      <div class="panel-head">
+        <h2>Recent positions &amp; events</h2>
+      </div>
+      <div class="positions-list" id="bot-positions">
+        <div class="market-row empty">Trade events appear here when the bot runs.</div>
+      </div>
+    </section>
+
+    <section class="card-panel page-panel bot-log-section">
+      <div class="panel-head">
+        <h2>Bot logs</h2>
+      </div>
+      <div class="log bot-log-panel" id="bot-log"></div>
+    </section>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/pages/bot.js"></script>
+</body>
+</html>
