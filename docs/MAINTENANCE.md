@@ -18,7 +18,8 @@ This project ships user-facing docs at **`http://localhost:<DASHBOARD_PORT>/docs
 | `feeds/` | Node NATS publisher (`npm run feeds:nats`); optional Rust publisher (`npm run feeds:rust` after `feeds:rust:build`) |
 | `monitoring/` | Latency metrics + trade-depth watch |
 | `data/` | Strategy Lab presets, bot profiles, per-profile paper wallets |
-| `docs/` | This maintenance checklist (user docs are under `dashboard/public/docs/`) |
+| `docs/` | This maintenance checklist; `docs/QUIET-STARTUP.md` for NATS/RPC-off `.env` |
+| `docs/QUIET-STARTUP.md` | Copy-paste `.env` for silent direct-mode startup |
 
 ## When to update docs
 
@@ -46,7 +47,7 @@ If the change is internal-only (refactor, rename private helper) with no user-vi
 | Module | Role |
 |--------|------|
 | `bot/Config.js` | Central env: windows, strategies, NATS, session, polling |
-| `bot/SessionManager.js` | `BOT_SESSION_MODE`: indefinite, timed, trades, pnl |
+| `bot/SessionManager.js` | Run duration: `BOT_RUN_MODE` indefinite / markets / time; legacy session modes |
 | `bot/MarketScanner.js` | Gamma roster + CLOB enrich (mid, book, spread, ring-buffer history) |
 | `bot/StrategyRouter.js` | `BOT_STRATEGIES` priority list → `signals/strategies_runtime.js` |
 | `bot/PolymarketBot.js` | WS-driven eval (default) + 30s discovery tick; paper execute |

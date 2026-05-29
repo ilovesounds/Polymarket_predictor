@@ -19,17 +19,7 @@
         <p class="brand-sub">Documentation</p>
       </div>
     </div>
-    <nav class="app-nav" aria-label="Dashboard">
-      <a href="/live">Live</a>
-      <a href="/orderbook">Orderbook</a>
-      <a href="/bot">Bot</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/markets">Markets</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/lab">Strategy Lab</a>
-      <a href="/latency">Latency</a>
-      <a href="/docs">Docs</a>
-    </nav>
+    <nav class="app-nav" aria-label="Dashboard"></nav>
     <div class="status-bar" style="grid-column: 3; grid-row: 1;">
       <span class="pill on">Reference</span>
     </div>
@@ -137,8 +127,12 @@ cp .env.example .env</pre>
               <tr><td><code>MARKET_WINDOW</code></td><td><code>15</code></td><td><code>5</code>, <code>15</code>, <code>1d</code>, <code>both</code> (5m+15m), or <code>all</code> (5m+15m+1d).</td></tr>
               <tr><td><code>BOT_STRATEGY</code></td><td><code>deterministic_yes_50</code></td><td>Strategy id when starting bot from CLI or dashboard spawn.</td></tr>
               <tr><td><code>BOT_MARKET_WINDOW</code></td><td><code>15m</code></td><td>Markets the bot trades: <code>5m</code>, <code>15m</code>, <code>1d</code>, <code>both</code>, or <code>all</code> (Bot page / spawn env).</td></tr>
-              <tr><td><code>BOT_RUN_LIMIT_MODE</code></td><td><code>unlimited</code></td><td><code>trades</code> (stop after N entries) or <code>end_of_day</code> (local midnight).</td></tr>
-              <tr><td><code>BOT_RUN_LIMIT_TRADES</code></td><td><code>11</code></td><td>When mode is <code>trades</code>, number of entries before the bot stops.</td></tr>
+              <tr><td><code>BOT_RUN_MODE</code></td><td><code>indefinite</code></td><td><code>indefinite</code>, <code>markets</code> (stop after N entries), or <code>time</code> (stop after N minutes).</td></tr>
+              <tr><td><code>BOT_RUN_MARKET_LIMIT</code></td><td><code>10</code></td><td>When mode is <code>markets</code>, number of position entries before graceful stop.</td></tr>
+              <tr><td><code>BOT_RUN_TIME_LIMIT_MINUTES</code></td><td><code>60</code></td><td>When mode is <code>time</code>, minutes from bot start before stop.</td></tr>
+              <tr><td><code>BOT_RUN_UNTIL</code></td><td>—</td><td>Optional ISO timestamp — additional stop deadline (advanced).</td></tr>
+              <tr><td><code>BOT_RUN_LIMIT_MODE</code></td><td><code>unlimited</code></td><td>Legacy: <code>trades</code> or <code>end_of_day</code>. Prefer <code>BOT_RUN_MODE</code>.</td></tr>
+              <tr><td><code>BOT_RUN_LIMIT_TRADES</code></td><td><code>11</code></td><td>Legacy trade-count limit when <code>BOT_RUN_LIMIT_MODE=trades</code>.</td></tr>
             </tbody>
           </table>
         </div>
@@ -257,7 +251,7 @@ export MARKET_WINDOW=15
             <tbody>
               <tr><td><code>/</code>, <code>/live</code></td><td>Live</td><td>Split view: Polymarket prices/trades + Binance BTC stream; market window selector in header.</td></tr>
               <tr><td><code>/orderbook</code></td><td>Orderbook</td><td>YES/NO bid/ask ladders and depth for the primary active market.</td></tr>
-              <tr><td><code>/bot</code></td><td>Bot</td><td>Start/stop paper bot, pick strategy, view cash, logs, and open positions.</td></tr>
+              <tr><td><code>/bot</code></td><td>Bot</td><td>Start/stop paper bot, run duration, strategy, sizing, logs.</td></tr>
               <tr><td><code>/portfolio</code></td><td>Portfolio</td><td>Paper cash, open positions, trade history, and PnL (bot + dashboard feed).</td></tr>
               <tr><td><code>/markets</code></td><td>Markets</td><td>Gamma market explorer: 5m / 15m / 1d tabs, pick any live BTC window market, full detail panel. Selection becomes the primary stream for <code>/live</code> and <code>/orderbook</code>.</td></tr>
               <tr><td><code>/latency</code></td><td>Latency</td><td>Stream RTT, oracle age, and trade-depth pipeline metrics (SSE + REST).</td></tr>
@@ -276,12 +270,12 @@ export MARKET_WINDOW=15
         <p>Example Gamma fields on each market: <code>question</code>, <code>slug</code>, <code>conditionId</code>, <code>clobTokenIds</code> → <code>tokenIdYes</code>/<code>tokenIdNo</code>, <code>endDate</code> → <code>endTime</code>, <code>eventStartTime</code>, <code>windowStartTime</code>, <code>volume24hr</code>, <code>liquidity</code>, <code>outcomePrices</code>, <code>active</code>, <code>closed</code>, plus nested <code>event</code> metadata from the events API.</p>
         <h3>HTTP API (dashboard server)</h3>
         <ul>
-          <li><code>GET /api/bot/status</code> — bot state, strategy list</li>
+          <li><code>GET /api/bot/status</code> — bot state, run progress (<code>runProgress</code>), strategy list</li>
           <li><code>GET /api/bot/profile</code> / <code>POST /api/bot/profile</code> — session profile (strategy, stops, entry window)</li>
           <li><code>GET /api/bot/profiles</code> / <code>POST /api/bot/profiles</code> — named bot profiles (create, save, duplicate, delete, select)</li>
           <li><code>GET /api/bot/instances</code> — running bot instance(s) with <code>profileId</code></li>
           <li><code>GET /api/portfolio?profileId=…</code> — paper wallet for a profile (<code>data/paper-wallets/{id}.json</code>)</li>
-          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> (start body: <code>profileId</code>, <code>marketWindow</code>, <code>runLimit</code>, sizing fields)</li>
+          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> (start body: <code>profileId</code>, <code>runMode</code>, <code>runMarketLimit</code>, <code>runTimeLimitMinutes</code>, sizing fields)</li>
           <li><code>GET /api/bot/strategies</code> / <code>POST /api/bot/strategy</code> — list or set strategy</li>
           <li><code>GET /api/polymarket/mode</code> / <code>POST /api/polymarket/mode</code> — 5m / 15m / 1d / both / all filter</li>
           <li><code>GET /api/markets?window=5m|15m|1d</code> — all live BTC markets for that window (Gamma, 30s cache)</li>
@@ -339,12 +333,32 @@ export MARKET_WINDOW=15
         <p>On entry, logs include profile and sizing, e.g. <code>[PositionOpen] profile=conservative-25 | sizing=percent(25%) | size=$5.00</code>. The UI shows a preview: <strong>Next bet ≈ $X.XX (Y% of $bankroll)</strong>.</p>
         <h3>Named bot profiles</h3>
         <p>
-          On <a href="/bot">/bot</a>, use the <strong>Bot profile</strong> dropdown to switch between saved configs
+          On <a href="/bot">/bot</a>, use the <strong>Profile</strong> dropdown to switch between saved configs
           (<code>data/bot-profiles.json</code>). Each profile has its own paper wallet in
-          <code>data/paper-wallets/{profileId}.json</code>. Click <strong>Start bot with profile</strong> to spawn
-          <code>bot.js</code> with <code>BOT_PROFILE_ID</code> and profile sizing env vars. Default seeds:
-          <code>default</code> (compound) and <code>conservative-25</code> (25% percent sizing).
+          <code>data/paper-wallets/{profileId}.json</code>. Click <strong>Start</strong> to spawn
+          <code>bot.js</code> with <code>BOT_PROFILE_ID</code>, sizing, stop-loss, and entry-window env vars.
+          Default seeds: <code>default</code> (compound) and <code>conservative-25</code> (25% percent sizing).
         </p>
+        <h3>Stop loss &amp; entry window</h3>
+        <p>Configure on <a href="/bot">/bot</a> or in Strategy Lab → <strong>Bot profile</strong>. Fields persist in the active named profile and <code>data/bot-profile.json</code> session mirror.</p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Field</th><th>Meaning</th><th>Default (5m)</th></tr></thead>
+            <tbody>
+              <tr><td><code>stopLossPrice</code></td><td>Exit YES long when midpoint ≤ this price</td><td>— (use <code>stopThreshold</code> 0.45)</td></tr>
+              <tr><td><code>stopLossPct</code></td><td>Exit when YES falls this % below entry</td><td>10% on conservative profile</td></tr>
+              <tr><td><code>stopThreshold</code></td><td>Floor when no price/% stop set; also strategy fallback</td><td>0.45</td></tr>
+              <tr><td><code>takeProfitPrice</code></td><td>Optional fixed take-profit (sets <code>BOT_TAKE_PROFIT_PRICE</code>)</td><td>none (hold to resolution)</td></tr>
+              <tr><td><code>entryMaxSeconds</code></td><td>Don't enter while <em>more than</em> this many seconds remain (wait for market to mature)</td><td>270</td></tr>
+              <tr><td><code>entryMinSeconds</code></td><td>Don't enter until this many seconds <em>after window open</em> (optional override)</td><td>built-in min 30s left at end</td></tr>
+              <tr><td><code>tradesPerMarket</code></td><td><code>single</code> (one open position per market) or <code>multiple</code> (scale-in / re-entry)</td><td><code>single</code></td></tr>
+              <tr><td><code>multiEntryMode</code></td><td>When <code>multiple</code>: <code>sequential</code> (one at a time, re-enter after exit) or <code>simultaneous</code> (stack open positions). Env: <code>BOT_MULTI_ENTRY_MODE</code></td><td><code>sequential</code></td></tr>
+              <tr><td><code>maxTradesPerMarket</code></td><td>Simultaneous: max concurrent open positions. Sequential: max total entries per market window</td><td>2</td></tr>
+              <tr><td><code>minSecondsBetweenEntries</code></td><td>Cooldown between re-entries on the same market (optional)</td><td>0</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Effective entry band for 5m: <strong>30s &lt; time left &lt; 270s</strong> unless overridden. Bot logs <code>Entry allowed when: …</code> and <code>Stop loss: YES ≤ …</code> at startup; entry skips show the same window in the reason string. With <code>tradesPerMarket=multiple</code>, each entry is a separate position (unique <code>tradeId</code>); portfolio shows one row per position and logs e.g. <code>Bought 2nd YES entry @ …</code>. Use <code>multiEntryMode=simultaneous</code> to stack open positions up to <code>maxTradesPerMarket</code>, or <code>sequential</code> for one-at-a-time re-entry until the per-window entry cap.</p>
         <h3>Apply preset to bot</h3>
         <ol>
           <li>Adjust microstructure sliders and bet sizing on Strategy Lab → <strong>Apply to bot</strong>.</li>
@@ -369,11 +383,18 @@ export MARKET_WINDOW=15
 # or with strategy / bankroll:
 BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
         <p>With <code>ENABLE_DASHBOARD_FEED=true</code>, trade events appear on the Bot page while the dashboard is up.</p>
-        <h3>Bot page: markets &amp; run limit</h3>
-        <p>On <strong>Bot</strong>, set <em>Markets to trade</em> (which windows the bot evaluates) and <em>Run until</em> (next N trades or end of day). The header <em>Market window</em> dropdown only filters dashboard feeds; it does not limit the bot unless you match it in Bot controls.</p>
+        <h3>Bot page: run duration</h3>
+        <p>On <strong>Bot</strong>, the <em>Run duration</em> section controls when the paper bot stops gracefully (no new entries, exits open positions, then process exit):</p>
+        <ul>
+          <li><strong>Run indefinitely</strong> — default; runs until you click Stop.</li>
+          <li><strong>Stop after N markets</strong> — counts <em>entries</em> (positions opened), not round-trip exits.</li>
+          <li><strong>Stop after N minutes</strong> — elapsed time from bot start.</li>
+          <li><strong>Stop at (optional)</strong> — advanced ISO deadline; applies in addition to the selected mode when set.</li>
+        </ul>
+        <p>Settings save to the active named profile and pass to the bot as <code>BOT_RUN_MODE</code>, <code>BOT_RUN_MARKET_LIMIT</code>, and <code>BOT_RUN_TIME_LIMIT_MINUTES</code>. While running, progress appears under the controls (e.g. <code>3/10 markets · 45m remaining</code>) and in <code>GET /api/bot/status</code> as <code>runProgress</code>.</p>
         <h3>Trading windows (bot)</h3>
         <ul>
-          <li><strong>5m markets</strong>: trades only when 30–270 seconds remain in the window.</li>
+          <li><strong>5m markets</strong>: trades only when 30–270 seconds remain (configurable via <code>entryMaxSeconds</code> / <code>entryMinSeconds</code>).</li>
           <li><strong>15m markets</strong>: trades when 60–840 seconds remain.</li>
           <li><strong>1d markets</strong>: trades when 3,600–82,800 seconds remain (1h after open until 1h before close).</li>
         </ul>
@@ -386,7 +407,7 @@ BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
           <table class="docs-table">
             <thead><tr><th>ID</th><th>Label</th><th>Entry rule</th><th>Stop</th></tr></thead>
             <tbody>
-              <tr><td><code>deterministic_yes_50</code></td><td>Deterministic YES &gt;= 0.50</td><td>YES midpoint ≥ 0.50</td><td>0.45</td></tr>
+              <tr><td><code>deterministic_yes_50</code></td><td>Deterministic YES &gt;= 0.50</td><td>YES midpoint ≥ 0.50</td><td>0.45 (overridden by profile stop)</td></tr>
               <tr><td><code>conservative_yes_55</code></td><td>Conservative YES &gt;= 0.55</td><td>YES midpoint ≥ 0.55</td><td>0.50</td></tr>
               <tr><td><code>momentum_confirmed_yes_50</code></td><td>YES &gt;= 0.50 + momentum up</td><td>YES ≥ 0.50 and Binance short momentum up</td><td>0.46</td></tr>
             </tbody>

@@ -7,6 +7,8 @@ const MAX_TRADE_EVENTS = 50;
 
 const STREAM_KEYS = [
   'binance_ws',
+  'coinbase_ws',
+  'kraken_ws',
   'chainlink_oracle_age',
   'chainlink_poll_rtt',
   'poly_ws_price',

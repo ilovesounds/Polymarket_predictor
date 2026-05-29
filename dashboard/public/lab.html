@@ -18,17 +18,7 @@
         <p class="brand-sub">Strategy Lab</p>
       </div>
     </div>
-    <nav class="app-nav" aria-label="Dashboard">
-      <a href="/live">Live</a>
-      <a href="/orderbook">Orderbook</a>
-      <a href="/bot">Bot</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/markets">Markets</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/lab">Strategy Lab</a>
-      <a href="/latency">Latency</a>
-      <a href="/docs">Docs</a>
-    </nav>
+    <nav class="app-nav" aria-label="Dashboard"></nav>
     <div class="top-controls">
       <label class="control-group" for="poly-mode-select">
         <span class="control-label">Market window</span>
@@ -42,10 +32,10 @@
       </label>
     </div>
     <div class="status-bar">
-      <span id="ws-status" class="pill off">WS disconnected</span>
-      <span id="binance-status" class="pill off">Binance —</span>
-      <span id="poly-status" class="pill off">Polymarket —</span>
-      <span id="bot-status" class="pill">Bot idle</span>
+      <span id="ws-status" class="pill pill-sm off">WS disconnected</span>
+      <span id="binance-status" class="pill pill-sm off">Binance —</span>
+      <span id="poly-status" class="pill pill-sm off">Polymarket —</span>
+      <span id="bot-status" class="pill pill-sm">Bot idle</span>
     </div>
   </header>
 
@@ -131,16 +121,46 @@
               </div>
             </label>
             <label class="lab-field">
-              <span>Min seconds after open</span>
-              <input id="lab-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
+              <span>Don't enter while more than __ s remain</span>
+              <input id="lab-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default (e.g. 270 on 5m)" />
             </label>
             <label class="lab-field">
-              <span>Max seconds before end</span>
-              <input id="lab-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
+              <span>Don't enter until __ s after window opens</span>
+              <input id="lab-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default min time left" />
             </label>
             <label class="lab-field">
-              <span>Max trades per market</span>
-              <input id="lab-max-trades-market" class="control-input" type="number" min="1" max="100" value="1" />
+              <span>Take profit (YES, optional)</span>
+              <input id="lab-take-profit-price" class="control-input" type="number" min="0.51" max="0.99" step="0.01" placeholder="none" />
+            </label>
+            <p id="lab-trading-preview" class="lab-lead lab-sizing-hint" aria-live="polite"></p>
+            <label class="lab-field">
+              <span>Entries per market</span>
+              <select id="lab-trades-per-market" class="control-input">
+                <option value="single">One trade per market</option>
+                <option value="multiple">Allow multiple entries</option>
+              </select>
+            </label>
+            <div class="lab-field hidden" id="lab-multi-entry-mode-group">
+              <span>Multiple entry mode</span>
+              <div class="lab-segmented" role="radiogroup" aria-label="Multiple entry mode">
+                <label class="lab-segment">
+                  <input type="radio" name="lab-multi-entry-mode" value="simultaneous" />
+                  <span>Simultaneous</span>
+                </label>
+                <label class="lab-segment">
+                  <input type="radio" name="lab-multi-entry-mode" value="sequential" checked />
+                  <span>Sequential</span>
+                </label>
+              </div>
+              <p class="lab-lead lab-sizing-hint">Simultaneous: stack up to max open positions at once. Sequential: one position at a time — re-enter after exit until max entries per window.</p>
+            </div>
+            <label class="lab-field hidden" id="lab-max-trades-group">
+              <span id="lab-max-trades-label">Max open positions per market</span>
+              <input id="lab-max-trades-market" class="control-input" type="number" min="2" max="5" value="2" />
+            </label>
+            <label class="lab-field hidden" id="lab-entry-cooldown-group">
+              <span>Min seconds between entries (optional)</span>
+              <input id="lab-min-entry-cooldown" class="control-input" type="number" min="0" step="1" placeholder="0" />
             </label>
           </fieldset>
 

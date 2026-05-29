@@ -21,6 +21,8 @@ const {
 const {
   getActiveBTCShortMarkets,
   listLiveBTCMarketsForWindow,
+  fetchLiveMarketsForMode,
+  invalidateLiveMarketCaches,
   getMarketDetails,
   subscribeClobAssets,
   pairYesNoPrices,
@@ -40,8 +42,13 @@ const {
   defaultPresetFields,
 } = require('../lib/strategyLab');
 const { sizingSnapshot, resolveSizingConfig } = require('../lib/betSizing');
-const { listStrategies, normalizeStrategyId } = require('../signals/strategies_runtime');
+const {
+  listStrategies,
+  normalizeStrategyId,
+  strategyStopForProfile,
+} = require('../signals/strategies_runtime');
 const { createNatsBridge } = require('../lib/natsBridge');
+const { isNatsEnabled, isChainlinkEnabled, resolvePolygonRpc } = require('../lib/serviceFlags');
 const { SUBJECTS } = require('../lib/nats/subjects');
 const { toDashboardWire, botStatus, botControl, polymarketTrade } = require('../lib/nats/schemas');
 const {
@@ -59,6 +66,10 @@ const {
   pickPrimaryLiveMarket,
   primaryNeedsRoll,
   isMarketLive,
+  getWindowPhase,
+  describePrimarySelection,
+  shouldIgnorePreferredId,
+  parseWindowStartMs: parseWindowStartMsSelection,
 } = require('../lib/marketSelection');
 const {
   revaluePositionRow,
@@ -71,6 +82,7 @@ const {
   saveBotProfile,
   profileToEnv,
   normalizeBotProfile,
+  tradingControlsPreview,
 } = require('../lib/botProfile');
 const {
   appendCashAdjustment,
@@ -95,13 +107,20 @@ const {
   portfolioStateToWallet,
 } = require('../lib/paperWallet');
 const { previewBetLabel } = require('../lib/betSizing');
+const { PriceBufferStore } = require('../lib/priceRingBuffer');
+const {
+  ALL_SOURCES,
+  bufferKey: exchangeBufferKey,
+  isExchangeConnected,
+  startAltExchangeFeeds: connectAltExchangeFeeds,
+} = require('../feeds/multiExchange');
 
 const PORT = Number(process.env.DASHBOARD_PORT || 3847);
 const STARTING_CASH = Number.parseFloat(
   process.env.STARTING_CASH || process.env.STARTING_BANKROLL || '20'
 );
 const PORTFOLIO_TRADE_HISTORY_MAX = 500;
-const USE_NATS = process.env.USE_NATS !== 'false' && process.env.NATS_URL !== 'disabled';
+const USE_NATS = isNatsEnabled();
 const USE_NATS_FEEDS = USE_NATS && process.env.USE_NATS_FEEDS === 'true';
 const DEBUG_POLY_STREAM = process.env.DEBUG_POLY_STREAM === 'true';
 const NATS_FEED_FALLBACK_MS = Number(process.env.NATS_FEED_FALLBACK_MS || 12_000);
@@ -110,6 +129,8 @@ const POLY_WS_THROTTLE_MS = Number(process.env.POLY_WS_THROTTLE_MS || 250);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MARKET_REFRESH_MS = Number(process.env.MARKET_REFRESH_MS || 45_000);
 const MARKET_ROLL_CHECK_MS = Number(process.env.MARKET_ROLL_CHECK_MS || 5_000);
+const BTC_CHART_BUFFER_LEN = Number(process.env.BTC_CHART_BUFFER_LEN || 3600);
+const BTC_CHART_SAMPLE_MS = Number(process.env.BTC_CHART_SAMPLE_MS || 250);
 const MIDPOINT_FALLBACK_MS = 5_000;
 const ORDERBOOK_POLL_MS = 2_500;
 const BOT_STOP_TIMEOUT_MS = 6_000;
@@ -121,6 +142,8 @@ const sseClients = new Set();
 const polySubscriptions = new Map(); // key: conditionId:yes|no
 
 let binanceConnected = false;
+/** @type {Record<string, boolean>} */
+const exchangeConnected = Object.fromEntries(ALL_SOURCES.map((s) => [s, false]));
 let polymarketConnected = false;
 let selectedPolyMode = String(process.env.DASHBOARD_POLY_MODE || '15m');
 let selectedPrimaryMarketId = null;
@@ -137,7 +160,7 @@ let selectedStrategy = botProfile.strategyId;
 let selectedBotMarketWindow = botProfile.marketWindow;
 let botRunLimit = { ...botProfile.runLimit };
 let orderbookPollingTimer = null;
-const strategyOptions = listStrategies();
+const strategyOptions = listStrategyOptions();
 let natsBridge = null;
 let natsConnected = false;
 let natsConnectFailed = false;
@@ -164,6 +187,12 @@ let lastPolyWsEmitAt = 0;
 /** @type {Map<string, { priceToBeat: number, windowStartTime: number, priceToBeatSource: string }>} */
 const priceToBeatCache = new Map();
 let chainlinkPollTimer = null;
+const btcPriceBuffer = new PriceBufferStore(BTC_CHART_BUFFER_LEN);
+let lastBtcChartSampleAt = 0;
+/** @type {Record<string, number>} */
+const lastExchangeSampleAt = Object.fromEntries(ALL_SOURCES.map((s) => [s, 0]));
+/** When true, ignore manual primary pin and always follow the active live window. */
+let followLiveWindow = true;
 
 const initialCashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
 const botState = {
@@ -176,6 +205,7 @@ const botState = {
   stoppedAt: null,
   lastExitCode: null,
   logs: [],
+  runProgress: null,
 };
 
 const portfolioState = {
@@ -283,8 +313,7 @@ function revalueOpenPositionsFromCache() {
 
 function mergeEntryOpenPosition(row, body) {
   const existing = portfolioState.openPositions.find((pos) =>
-    (body.tradeId && pos.tradeId === body.tradeId)
-    || (body.marketId && pos.marketId === body.marketId)
+    body.tradeId && pos.tradeId === body.tradeId
   );
   if (!existing) return row;
   const entryPrice = row.entryPrice ?? existing.entryPrice;
@@ -412,6 +441,7 @@ function applyPortfolioEvent(body = {}) {
       currentPrice: body.currentPrice ?? body.entryPrice ?? null,
       currentValue: body.currentValue ?? body.betSize ?? null,
       unrealizedPnl: Number.isFinite(body.unrealizedPnl) ? body.unrealizedPnl : 0,
+      entryIndex: body.entryIndex ?? null,
       entryTime: body.entryTime || body.timestamp || Date.now(),
     }, body);
     if (row.marketId && Number.isFinite(row.currentPrice)) {
@@ -421,7 +451,6 @@ function applyPortfolioEvent(body = {}) {
       row,
       ...portfolioState.openPositions.filter((pos) =>
         !(body.tradeId && pos.tradeId === body.tradeId)
-        && !(body.marketId && pos.marketId === body.marketId)
       ),
     ];
     const cashAfterEntry = Number.isFinite(body.cashAfter) ? body.cashAfter : body.bankrollAfter;
@@ -441,7 +470,6 @@ function applyPortfolioEvent(body = {}) {
     }
     portfolioState.openPositions = portfolioState.openPositions.filter((pos) => {
       if (body.tradeId && pos.tradeId === body.tradeId) return false;
-      if (body.marketId && pos.marketId === body.marketId) return false;
       return true;
     });
   }
@@ -548,8 +576,35 @@ function ingestBotEvent(body = {}) {
     return broadcastPortfolio();
   }
 
+  if (body.type === 'run_progress') {
+    applyRunProgress(body);
+    const payload = { source: 'bot', timestamp: Date.now(), ...body };
+    broadcast(payload);
+    broadcast({
+      source: 'bot',
+      type: 'state',
+      timestamp: Date.now(),
+      running: botState.running,
+      mode: botState.mode,
+      pid: botState.pid,
+      runProgress: botState.runProgress,
+    });
+    sendStatus();
+    return payload;
+  }
+
   if (body.type === 'entry' || body.type === 'exit' || body.eventType === 'entry' || body.eventType === 'exit') {
     applyPortfolioEvent(body);
+    if (body.type === 'entry' || body.eventType === 'entry') {
+      const prev = botState.runProgress?.marketsTradedCount ?? 0;
+      applyRunProgress({
+        type: 'run_progress',
+        marketsTradedCount: prev + 1,
+        runMode: botState.runProgress?.runMode ?? botProfile.runMode,
+        runMarketLimit: botState.runProgress?.runMarketLimit ?? botProfile.runMarketLimit,
+        runTimeLimitMinutes: botState.runProgress?.runTimeLimitMinutes ?? botProfile.runTimeLimitMinutes,
+      });
+    }
     if (body.latencyTiming && (body.type === 'entry' || body.eventType === 'entry')) {
       recordTradeDepthPipeline(body.latencyTiming);
     }
@@ -570,6 +625,7 @@ function ingestBotEvent(body = {}) {
       running: botState.running,
       mode: botState.mode,
       pid: botState.pid,
+      runProgress: botState.runProgress,
     });
     broadcastPortfolio();
     sendStatus();
@@ -681,11 +737,13 @@ function emitPolymarketTrade(market, trade, via = 'clob_ws') {
 }
 
 function sendStatus() {
+  const feeds = exchangeFeedsStatus();
   const payload = {
     source: 'system',
     type: 'status',
     timestamp: Date.now(),
-    binanceConnected,
+    binanceConnected: feeds.binance,
+    exchangeFeeds: feeds,
     polymarketConnected,
     natsConnected,
     feedSource: USE_NATS_FEEDS
@@ -706,6 +764,7 @@ function sendStatus() {
       stoppedAt: botState.stoppedAt,
       lastExitCode: botState.lastExitCode,
       profileId: botState.profileId || activeProfileId,
+      runProgress: botState.runProgress,
       ...botSessionSnapshot(),
     },
   };
@@ -751,7 +810,13 @@ function bridgeNatsMessage(subject, msg) {
   const wire = toDashboardWire(subject, msg);
   if (!wire) return;
 
-  if (wire.source === 'binance' && wire.type === 'price') binanceConnected = true;
+  if (wire.source === 'binance' && wire.type === 'price') {
+    binanceConnected = true;
+    exchangeConnected.binance = true;
+  }
+  if (ALL_SOURCES.includes(wire.source) && wire.type === 'price') {
+    exchangeConnected[wire.source] = true;
+  }
   if (wire.source === 'polymarket') polymarketConnected = true;
 
   if (wire.source === 'bot' && wire.type === 'log') {
@@ -770,7 +835,7 @@ function bridgeNatsMessage(subject, msg) {
       }
       if (typeof wire.running === 'boolean') botState.running = wire.running;
     }
-    if (['entry', 'exit', 'portfolio_snapshot', 'state'].includes(wire.type)
+    if (['entry', 'exit', 'portfolio_snapshot', 'state', 'run_progress'].includes(wire.type)
       || wire.eventType === 'portfolio_snapshot') {
       ingestBotEvent(wire);
       return;
@@ -864,7 +929,7 @@ function marketWireFields(m) {
     slug: m.slug,
     tokenIdYes: m.tokenIdYes,
     tokenIdNo: m.tokenIdNo,
-    windowStartTime: m.windowStartTime ?? parseWindowStartMs(m) ?? undefined,
+    windowStartTime: parseWindowStartMs(m) ?? m.windowStartTime ?? undefined,
     priceToBeat: m.priceToBeat,
     priceToBeatSource: m.priceToBeatSource,
     liquidity: m.liquidity,
@@ -878,9 +943,25 @@ function marketWireFields(m) {
 
 function syncPrimaryMarketId(preferredId = selectedPrimaryMarketId) {
   lastMarkets = filterLiveMarketsForMode(lastMarkets, selectedPolyMode);
-  const primary = pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, preferredId);
+  const effectivePreferred = followLiveWindow
+    ? null
+    : (shouldIgnorePreferredId(preferredId, lastMarkets, selectedPolyMode)
+      ? null
+      : preferredId);
+  const selection = describePrimarySelection(lastMarkets, selectedPolyMode, effectivePreferred);
+  const primary = selection.primary;
   if (primary) selectedPrimaryMarketId = primary.conditionId;
   else selectedPrimaryMarketId = null;
+
+  if (selection.hasActiveWindow && primary && selection.phase === 'upcoming') {
+    console.warn('[Dashboard] primary is upcoming while active window exists', {
+      mode: selectedPolyMode,
+      picked: primary.question?.slice(0, 56),
+      slug: primary.slug,
+      followLiveWindow,
+    });
+  }
+
   return primary;
 }
 
@@ -972,6 +1053,7 @@ async function setPrimaryMarket(conditionId, options = {}) {
   if (beat) detail = { ...detail, ...beat };
 
   selectedPrimaryMarketId = detail.conditionId;
+  if (options.manualSelect || options.followLive === false) followLiveWindow = false;
 
   if (options.syncMode !== false) {
     const nextMode = normalizePolyMode(windowKey);
@@ -1093,6 +1175,7 @@ function handleBotOutput(chunk, level = 'info') {
           running: botState.running,
           mode: botState.mode,
           pid: botState.pid,
+          runProgress: botState.runProgress,
         });
       }
     }
@@ -1194,25 +1277,88 @@ function restartOrderbookPolling() {
 
 function syncSessionFromProfile(profile = botProfile) {
   selectedBotMarketWindow = profile.marketWindow;
-  botRunLimit = { ...profile.runLimit };
+  botRunLimit = { ...(profile.runLimit || {}) };
   selectedStrategy = profile.strategyId;
+}
+
+function applyRunProgress(body = {}) {
+  if (body.type !== 'run_progress' && body.marketsTradedCount == null && body.runMode == null) return;
+  const prev = botState.runProgress || {};
+  const merged = {
+    runMode: body.runMode ?? prev.runMode ?? botProfile.runMode,
+    runMarketLimit: body.runMarketLimit ?? body.marketLimit ?? prev.runMarketLimit ?? null,
+    runTimeLimitMinutes: body.runTimeLimitMinutes ?? prev.runTimeLimitMinutes ?? null,
+    runUntil: body.runUntil ?? prev.runUntil ?? null,
+    marketsTradedCount: body.marketsTradedCount ?? prev.marketsTradedCount ?? 0,
+    marketLimit: body.marketLimit ?? body.runMarketLimit ?? prev.marketLimit ?? null,
+    elapsedMs: body.elapsedMs ?? prev.elapsedMs ?? 0,
+    timeLimitMs: body.timeLimitMs ?? prev.timeLimitMs ?? null,
+    remainingMs: body.remainingMs ?? prev.remainingMs ?? null,
+    startedAt: body.startedAt ?? prev.startedAt ?? botState.startedAt,
+    stopReason: body.stopReason ?? prev.stopReason ?? null,
+  };
+  const { buildRunProgressSnapshot } = require('../lib/botRunConfig');
+  const snap = buildRunProgressSnapshot({
+    runDuration: {
+      runMode: merged.runMode,
+      runMarketLimit: merged.runMarketLimit ?? merged.marketLimit ?? 10,
+      runTimeLimitMinutes: merged.runTimeLimitMinutes ?? 60,
+      runUntil: merged.runUntil,
+    },
+    marketsTradedCount: merged.marketsTradedCount,
+    startedAt: merged.startedAt,
+  });
+  botState.runProgress = { ...merged, ...snap };
+}
+
+function profileWindowMinutes(marketWindow = selectedBotMarketWindow) {
+  if (marketWindow === '15m') return 15;
+  if (marketWindow === '1d') return 1440;
+  return 5;
+}
+
+function runDurationLabelFromProfile(profile = botProfile) {
+  const p = profile || botProfile;
+  if (p.runMode === 'markets') return `limit ${p.runMarketLimit} market entries`;
+  if (p.runMode === 'time') return `limit ${p.runTimeLimitMinutes} min`;
+  if (p.runUntil) return `until ${p.runUntil}`;
+  if (p.runLimit?.mode === 'trades') return `limit ${p.runLimit.tradeCount} trades`;
+  if (p.runLimit?.mode === 'end_of_day') return 'until EOD';
+  return 'no limit';
 }
 
 function botProfileSnapshot() {
   return {
     strategyId: selectedStrategy,
     marketWindow: selectedBotMarketWindow,
+    runMode: botProfile.runMode,
+    runMarketLimit: botProfile.runMarketLimit,
+    runTimeLimitMinutes: botProfile.runTimeLimitMinutes,
+    runUntil: botProfile.runUntil,
     runLimit: { ...botRunLimit },
     stopLossPct: botProfile.stopLossPct,
     stopLossPrice: botProfile.stopLossPrice,
     stopThreshold: botProfile.stopThreshold,
+    takeProfitPrice: botProfile.takeProfitPrice,
     entryMinSeconds: botProfile.entryMinSeconds,
     entryMaxSeconds: botProfile.entryMaxSeconds,
     entryMinPrice: botProfile.entryMinPrice,
     entryMaxPrice: botProfile.entryMaxPrice,
     maxTradesPerMarket: botProfile.maxTradesPerMarket,
+    tradesPerMarket: botProfile.tradesPerMarket || 'single',
+    multiEntryMode: botProfile.multiEntryMode === 'simultaneous' ? 'simultaneous' : 'sequential',
+    minSecondsBetweenEntries: botProfile.minSecondsBetweenEntries ?? 0,
     updatedAt: botProfile.updatedAt,
+    tradingPreview: tradingControlsPreview(
+      botProfile,
+      profileWindowMinutes(),
+      strategyStopForProfile(selectedStrategy, botProfile)
+    ),
   };
+}
+
+function listStrategyOptions(profile = botProfile) {
+  return listStrategies(profile);
 }
 
 function botSessionSnapshot() {
@@ -1287,17 +1433,35 @@ function startBotProcess(profileId = activeProfileId) {
   botState.startedAt = Date.now();
   botState.stoppedAt = null;
   botState.lastExitCode = null;
+  botState.runProgress = {
+    runMode: profile?.runMode ?? botProfile.runMode ?? 'indefinite',
+    runMarketLimit: profile?.runMode === 'markets' ? profile.runMarketLimit : null,
+    runTimeLimitMinutes: profile?.runMode === 'time' ? profile.runTimeLimitMinutes : null,
+    runUntil: profile?.runUntil ?? null,
+    marketsTradedCount: 0,
+    marketLimit: profile?.runMode === 'markets' ? profile.runMarketLimit : null,
+    elapsedMs: 0,
+    timeLimitMs: profile?.runMode === 'time' ? (profile.runTimeLimitMinutes * 60_000) : null,
+    remainingMs: profile?.runMode === 'time' ? (profile.runTimeLimitMinutes * 60_000) : null,
+    startedAt: botState.startedAt,
+    label: profile?.runMode === 'markets'
+      ? `0/${profile.runMarketLimit} markets`
+      : profile?.runMode === 'time'
+        ? `${profile.runTimeLimitMinutes}m remaining`
+        : 'indefinite',
+    stopReason: null,
+  };
   resetPortfolioSession(spawnProfileId);
   setupBotProcessHandlers(child);
   const session = botSessionSnapshot();
   const profileName = getBotProfileById(spawnProfileId)?.name || spawnProfileId;
   broadcast(makeBotLogLine(
-    `Bot started (pid=${botState.pid || 'n/a'}) · profile=${profileName} · markets=${session.marketWindow} · ${session.runLimit.mode === 'trades' ? `limit ${session.runLimit.tradeCount} trades` : session.runLimit.mode === 'end_of_day' ? 'until EOD' : 'no limit'}`,
+    `Bot started (pid=${botState.pid || 'n/a'}) · profile=${profileName} · markets=${session.marketWindow} · ${runDurationLabelFromProfile(getBotProfileById(spawnProfileId) || botProfile)}`,
     'info'
   ));
   broadcastPortfolio();
   sendStatus();
-  return { ok: true, statusCode: 200, body: { bot: botState } };
+  return { ok: true, statusCode: 200, body: { bot: { ...botState, runProgress: botState.runProgress } } };
 }
 
 function stopBotProcess() {
@@ -1344,10 +1508,14 @@ function stopBotProcess() {
 async function maybeRollPrimaryMarket() {
   if (USE_NATS_FEEDS) return false;
   const previousId = selectedPrimaryMarketId;
+  try {
+    const fresh = await fetchLiveMarketsForMode(selectedPolyMode, { forceRefresh: true });
+    if (fresh.length) lastMarkets = filterAndRankMarkets(fresh, selectedPolyMode);
+  } catch (_) {}
   const current = lastMarkets.find((m) => m.conditionId === previousId) || getPrimaryMarket();
-  if (!primaryNeedsRoll(current)) return false;
+  if (!primaryNeedsRoll(current, lastMarkets, selectedPolyMode)) return false;
 
-  await subscribePolymarketMarkets();
+  await subscribePolymarketMarkets({ forceRefresh: true });
   if (!selectedPrimaryMarketId || selectedPrimaryMarketId === previousId) return false;
 
   const next = getPrimaryMarket();
@@ -1368,14 +1536,16 @@ function subscriptionStale(cycle) {
   return cycle !== polySubscriptionCycle;
 }
 
-async function subscribePolymarketMarkets() {
+async function subscribePolymarketMarkets(options = {}) {
+  const forceRefresh = options.forceRefresh === true;
   const cycle = ++polySubscriptionCycle;
   closePolySubscriptions();
   polymarketConnected = false;
 
   let markets;
   try {
-    markets = await getActiveBTCShortMarkets(modeToWindows(selectedPolyMode));
+    if (forceRefresh) invalidateLiveMarketCaches();
+    markets = await fetchLiveMarketsForMode(selectedPolyMode, { forceRefresh: true });
     if (subscriptionStale(cycle)) return;
     lastMarkets = filterAndRankMarkets(markets, selectedPolyMode);
   } catch (e) {
@@ -1416,11 +1586,31 @@ async function subscribePolymarketMarkets() {
     return;
   }
 
+  const pickNow = Date.now();
+  const pickStart = parseWindowStartMsSelection(primary);
+  const selectionMeta = describePrimarySelection(lastMarkets, selectedPolyMode, selectedPrimaryMarketId, pickNow);
+  debugPoly('primary market selected', {
+    mode: selectedPolyMode,
+    phase: getWindowPhase(primary, pickNow),
+    hasActiveWindow: selectionMeta.hasActiveWindow,
+    showingUpcomingOnly: selectionMeta.showingUpcomingOnly,
+    tteMin: Number(((primary.endTime - pickNow) / 60_000).toFixed(1)),
+    startInMin: Number.isFinite(pickStart)
+      ? Number(((pickStart - pickNow) / 60_000).toFixed(1))
+      : null,
+    conditionId: primary.conditionId?.slice(0, 14),
+    question: primary.question?.slice(0, 56),
+  });
+
   broadcast({
     source: 'polymarket',
     type: 'markets',
     selectedMode: selectedPolyMode,
     selectedMarketId: selectedPrimaryMarketId,
+    hasActiveWindow: selectionMeta.hasActiveWindow,
+    showingUpcomingOnly: selectionMeta.showingUpcomingOnly,
+    primaryPhase: selectionMeta.phase,
+    nextStartInMs: selectionMeta.nextStartInMs,
     markets: lastMarkets.map((m) => marketWireFields(m)),
     timestamp: Date.now(),
   });
@@ -1561,8 +1751,8 @@ function startMidpointFallback() {
 
 function startChainlinkPoll() {
   if (chainlinkPollTimer) return;
-  const rpc = process.env.POLYGON_RPC;
-  if (!rpc) return;
+  if (!isChainlinkEnabled()) return;
+  const rpc = resolvePolygonRpc();
   let provider;
   try {
     const { ethers } = require('ethers');
@@ -1576,24 +1766,96 @@ function startChainlinkPoll() {
   }, 30_000);
 }
 
+function appendExchangeSample(source, price, receivedAt) {
+  if (!Number.isFinite(price)) return;
+  const last = lastExchangeSampleAt[source] || 0;
+  if (receivedAt - last < BTC_CHART_SAMPLE_MS) return;
+  lastExchangeSampleAt[source] = receivedAt;
+  if (source === 'binance') lastBtcChartSampleAt = receivedAt;
+  btcPriceBuffer.append(exchangeBufferKey(source), price, receivedAt);
+}
+
+function broadcastExchangePrice(source, price, timing, extra = {}) {
+  const receivedAt = timing?.receivedAt || Date.now();
+  exchangeConnected[source] = true;
+  if (source === 'binance') binanceConnected = true;
+  appendExchangeSample(source, price, receivedAt);
+  broadcast({
+    source,
+    type: 'price',
+    price,
+    symbol: extra.symbol || (source === 'binance' ? 'BTCUSDT' : source === 'kraken' ? 'XBT/USD' : 'BTC-USD'),
+    latencyMs: timing?.latencyMs,
+    timestamp: receivedAt,
+    ...extra,
+  });
+}
+
 function startBinanceFeed() {
-  const url = process.env.BINANCE_WS_URL || 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade';
   connectBinanceFeed((price, timing) => {
-    binanceConnected = true;
     const chainlink = getChainlinkState();
     const receivedAt = timing?.receivedAt || Date.now();
-    broadcast({
-      source: 'binance',
-      type: 'price',
-      price,
+    broadcastExchangePrice('binance', price, timing, {
       chainlinkPrice: Number.isFinite(chainlink.price) ? chainlink.price : undefined,
       chainlinkAgeMs: chainlink.updatedAt ? receivedAt - chainlink.updatedAt : undefined,
       symbol: 'BTCUSDT',
-      latencyMs: timing?.latencyMs,
-      timestamp: receivedAt,
     });
   });
   startChainlinkPoll();
+}
+
+function startAltExchangeFeedsPanel() {
+  connectAltExchangeFeeds((source, tick) => {
+    broadcastExchangePrice(source, tick.price, {
+      receivedAt: tick.receivedAt,
+      latencyMs: tick.latencyMs,
+    }, { symbol: tick.symbol });
+  });
+}
+
+function btcHistoryPayload(maxAgeMs = 15 * 60_000, source = 'binance') {
+  const cutoff = Date.now() - maxAgeMs;
+  const key = exchangeBufferKey(source);
+  return btcPriceBuffer.getPriceHistory(key).filter((p) => p.t >= cutoff);
+}
+
+function exchangeFeedsStatus() {
+  exchangeConnected.binance = binanceConnected || isExchangeConnected('binance');
+  for (const src of ALL_SOURCES) {
+    if (src !== 'binance') exchangeConnected[src] = isExchangeConnected(src);
+  }
+  return { ...exchangeConnected };
+}
+
+async function handleLiveClientInit(ws, msg) {
+  followLiveWindow = msg.followLive !== false;
+  if (followLiveWindow) {
+    selectedPrimaryMarketId = null;
+  } else if (msg.selectedMarketId) {
+    selectedPrimaryMarketId = String(msg.selectedMarketId).trim() || null;
+  }
+  if (msg.mode) {
+    const nextMode = normalizePolyMode(msg.mode);
+    if (nextMode !== selectedPolyMode) {
+      selectedPolyMode = nextMode;
+      if (followLiveWindow) selectedPrimaryMarketId = null;
+    }
+  }
+  if (!USE_NATS_FEEDS) {
+    await subscribePolymarketMarkets({ forceRefresh: true });
+  } else {
+    sendStatus();
+  }
+  try {
+    for (const source of ALL_SOURCES) {
+      ws.send(JSON.stringify({
+        source,
+        type: 'history',
+        history: btcHistoryPayload(15 * 60_000, source),
+        timestamp: Date.now(),
+      }));
+    }
+  } catch (_) {}
 }
 
 function startHttpServer() {
@@ -1728,9 +1990,25 @@ function startHttpServer() {
     }
     if (req.method === 'GET' && req.url === '/api/bot/status') {
       const activePreset = getActivePreset();
+      const profileSnap = botProfileSnapshot();
+      let runProgress = botState.runProgress;
+      if (botState.running && runProgress) {
+        const { buildRunProgressSnapshot } = require('../lib/botRunConfig');
+        const syntheticState = {
+          runDuration: {
+            runMode: profileSnap.runMode,
+            runMarketLimit: profileSnap.runMarketLimit,
+            runTimeLimitMinutes: profileSnap.runTimeLimitMinutes,
+            runUntil: profileSnap.runUntil,
+          },
+          marketsTradedCount: runProgress.marketsTradedCount ?? 0,
+          startedAt: runProgress.startedAt ?? botState.startedAt,
+        };
+        runProgress = { ...runProgress, ...buildRunProgressSnapshot(syntheticState) };
+      }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
-        bot: { ...botState, strategyId: selectedStrategy, ...botSessionSnapshot() },
+        bot: { ...botState, strategyId: selectedStrategy, ...profileSnap, runProgress },
         sizing: resolveSizingConfig(activePreset),
         selectedPolyMode,
         botSession: botSessionSnapshot(),
@@ -1853,7 +2131,7 @@ function startHttpServer() {
         namedProfile: profile,
         activeProfileId,
         botSession: botSessionSnapshot(),
-        strategies: strategyOptions,
+        strategies: listStrategyOptions(),
         activeLabPreset: { id: activePreset.id, name: activePreset.name },
         sizing: resolveSizingConfig(activePreset),
         sizingPreview: profile
@@ -1978,6 +2256,21 @@ function startHttpServer() {
       return;
     }
 
+    if (req.method === 'GET' && req.url.startsWith('/api/btc/history')) {
+      const urlQuery = req.url.includes('?') ? new URLSearchParams(req.url.split('?')[1]) : null;
+      const minutes = Number(urlQuery?.get('minutes')) || 15;
+      const source = String(urlQuery?.get('source') || 'binance').toLowerCase();
+      const maxAgeMs = Math.min(60, Math.max(1, minutes)) * 60_000;
+      const validSource = ALL_SOURCES.includes(source) ? source : 'binance';
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        source: validSource,
+        history: btcHistoryPayload(maxAgeMs, validSource),
+        timestamp: Date.now(),
+      }));
+      return;
+    }
+
     const urlPath = req.url.split('?')[0];
     const urlQuery = req.url.includes('?') ? new URLSearchParams(req.url.split('?')[1]) : null;
 
@@ -2032,7 +2325,10 @@ function startHttpServer() {
     if (req.method === 'POST' && urlPath === '/api/markets/select') {
       try {
         const body = await readJsonBody(req);
-        const result = await setPrimaryMarket(body?.conditionId, { syncMode: body?.syncMode !== false });
+        const result = await setPrimaryMarket(body?.conditionId, {
+          syncMode: body?.syncMode !== false,
+          manualSelect: true,
+        });
         if (!result.ok) {
           res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(result));
@@ -2168,6 +2464,24 @@ function startHttpServer() {
       clients.delete(ws);
       sendStatus();
     });
+    ws.on('message', (raw) => {
+      let msg;
+      try { msg = JSON.parse(String(raw)); } catch { return; }
+      if (msg?.source === 'client' && msg?.type === 'live_init') {
+        handleLiveClientInit(ws, msg).catch((e) => {
+          console.warn('[Dashboard] live_init failed:', e.message);
+        });
+      }
+      if (msg?.source === 'client' && msg?.type === 'follow_live') {
+        followLiveWindow = msg.followLive !== false;
+        if (followLiveWindow) selectedPrimaryMarketId = null;
+        if (!USE_NATS_FEEDS) {
+          subscribePolymarketMarkets({ forceRefresh: true }).catch(() => {});
+        } else {
+          sendStatus();
+        }
+      }
+    });
     ws.send(JSON.stringify({
       source: 'system',
       type: 'hello',
@@ -2274,6 +2588,7 @@ async function startDirectFeeds() {
   directFeedsStarted = true;
   console.log('[Dashboard] direct feed ingest (CLOB WS + midpoint poll)');
   startBinanceFeed();
+  startAltExchangeFeedsPanel();
   await subscribePolymarketMarkets();
   await publishOrderbookSnapshot();
   setInterval(subscribePolymarketMarkets, MARKET_REFRESH_MS);

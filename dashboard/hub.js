@@ -7,7 +7,8 @@ const hub = new EventEmitter();
 hub.setMaxListeners(50);
 
 const DASHBOARD_URL = `http://127.0.0.1:${process.env.DASHBOARD_PORT || 3847}`;
-const USE_NATS = process.env.USE_NATS !== 'false' && process.env.NATS_URL !== 'disabled';
+const { isNatsEnabled } = require('../lib/serviceFlags');
+const USE_NATS = isNatsEnabled();
 
 let natsBridge = null;
 let natsReady = null;

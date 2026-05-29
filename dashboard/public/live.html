@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body data-page="live">
+<body data-page="live" class="live-page">
   <header class="app-header">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true"></div>
@@ -18,17 +18,7 @@
         <p class="brand-sub">Live streams</p>
       </div>
     </div>
-    <nav class="app-nav" aria-label="Dashboard">
-      <a href="/live">Live</a>
-      <a href="/orderbook">Orderbook</a>
-      <a href="/bot">Bot</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/markets">Markets</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/lab">Strategy Lab</a>
-      <a href="/latency">Latency</a>
-      <a href="/docs">Docs</a>
-    </nav>
+    <nav class="app-nav" aria-label="Dashboard"></nav>
     <div class="top-controls">
       <label class="control-group" for="poly-mode-select">
         <span class="control-label">Market window</span>
@@ -42,83 +32,92 @@
       </label>
     </div>
     <div class="status-bar">
-      <span id="ws-status" class="pill off">WS disconnected</span>
-      <span id="binance-status" class="pill off">Binance —</span>
-      <span id="poly-status" class="pill off">Polymarket —</span>
-      <span id="bot-status" class="pill">Bot idle</span>
+      <span id="ws-status" class="pill pill-sm off">WS disconnected</span>
+      <span id="binance-status" class="pill pill-sm off">Binance —</span>
+      <span id="poly-status" class="pill pill-sm off">Polymarket —</span>
+      <span id="bot-status" class="pill pill-sm">Bot idle</span>
     </div>
   </header>
 
-  <main class="split">
-    <section class="panel card-panel" id="panel-polymarket">
-      <div class="panel-head">
-        <div class="panel-title-block">
-          <h2>Polymarket</h2>
-          <p class="market-title" id="poly-market-title">Waiting for market…</p>
+  <div id="live-market-warning" class="live-market-warning" hidden role="status"></div>
+
+  <main class="live-main">
+    <article class="card-panel live-hero" id="panel-polymarket">
+      <header class="live-hero-head">
+        <div class="live-hero-head-row">
+          <div class="live-hero-title">
+            <h2 class="live-market-name" id="poly-market-title">Waiting for market…</h2>
+          </div>
+          <span id="poly-resolution" class="live-countdown resolution-pill" hidden aria-live="polite">—</span>
         </div>
-        <div class="panel-head-meta">
-          <span id="poly-resolution" class="resolution-pill" hidden>—</span>
-          <span class="meta" id="poly-meta">—</span>
+        <label class="follow-live-toggle" for="follow-live-toggle">
+          <input type="checkbox" id="follow-live-toggle" checked />
+          <span>Follow live window</span>
+        </label>
+      </header>
+
+      <div class="live-odds-row">
+        <div class="outcome-card outcome-yes hero-outcome">
+          <span class="outcome-label">YES</span>
+          <span class="price-display hero-price num" id="poly-yes-price">—</span>
+        </div>
+        <div class="outcome-card outcome-no hero-outcome">
+          <span class="outcome-label">NO</span>
+          <span class="price-display hero-price num" id="poly-no-price">—</span>
         </div>
       </div>
+
       <div class="beat-price-block" id="beat-price-block">
-        <div class="beat-price-head">
-          <span class="beat-label">Price to beat</span>
-          <span class="beat-source meta" id="beat-source">—</span>
-        </div>
-        <div class="beat-price-hero" id="beat-price-value">—</div>
-        <div class="beat-spot-row">
-          <div class="beat-spot">
-            <span class="mini-label">BTC now</span>
-            <span class="beat-spot-value" id="beat-btc-now">—</span>
+        <div class="beat-metrics-row">
+          <div class="beat-metric beat-metric-beat">
+            <span class="beat-label">Price to beat</span>
+            <div class="beat-price-hero num" id="beat-price-value">—</div>
+            <span class="beat-source meta" id="beat-source">—</span>
           </div>
-          <div class="beat-spot beat-spot-chainlink" id="beat-chainlink-wrap" hidden>
+          <div class="beat-metric beat-metric-spot">
+            <span class="beat-label spot-label">Current price</span>
+            <div class="spot-price-hero num" id="beat-btc-now">—</div>
+            <div class="beat-delta num" id="beat-delta" aria-live="polite">—</div>
+          </div>
+        </div>
+        <div class="btc-chart-wrap btc-chart-hero">
+          <div id="btc-price-chart" class="btc-price-chart-lwc" role="img" aria-label="BTC live price chart"></div>
+        </div>
+        <div class="beat-spot-row beat-chainlink-row" id="beat-chainlink-wrap" hidden>
+          <div class="beat-spot beat-spot-chainlink">
             <span class="mini-label">Chainlink</span>
-            <span class="beat-spot-value" id="beat-chainlink-now">—</span>
+            <span class="beat-spot-value num" id="beat-chainlink-now">—</span>
           </div>
         </div>
-        <div class="beat-delta" id="beat-delta" aria-live="polite">—</div>
       </div>
-      <div class="yes-no-grid">
-        <div class="outcome-card outcome-yes">
-          <div class="mini-label">YES</div>
-          <div class="price-display" id="poly-yes-price">—</div>
-        </div>
-        <div class="outcome-card outcome-no">
-          <div class="mini-label">NO</div>
-          <div class="price-display" id="poly-no-price">—</div>
-        </div>
-      </div>
-      <div class="sparkline-wrap"><canvas id="poly-spark" width="400" height="60"></canvas></div>
+
       <div class="trade-tape-section trade-tape-hero">
-        <div class="trade-popup-host trade-popup-host-live" id="trade-popup-host" aria-live="polite"></div>
+        <div class="trade-popup-host" id="trade-popup-host" aria-live="polite"></div>
         <div class="subsection">
           <div class="subsection-label">Trade tape</div>
           <div class="trade-tape trade-tape-live" id="trade-tape"></div>
         </div>
       </div>
-      <div class="subsection flex-grow">
-        <div class="subsection-label">Stream log</div>
-        <div class="log" id="poly-log"></div>
-      </div>
-    </section>
-    <section class="panel card-panel" id="panel-binance">
-      <div class="panel-head">
+
+      <details class="stream-log-details" id="poly-log-details">
+        <summary class="subsection-label">Stream log</summary>
+        <div class="log log-compact" id="poly-log"></div>
+      </details>
+    </article>
+
+    <aside class="card-panel live-side live-exchange-panel" id="panel-exchanges">
+      <div class="exchange-panel-head">
         <div class="panel-title-block">
-          <h2>Binance BTC/USDT</h2>
-          <p class="market-title muted-title">Spot aggregate trade</p>
+          <h2>BTC spot feeds</h2>
+          <p class="market-title muted-title">Live exchange comparison</p>
         </div>
-        <span class="meta" id="binance-meta">—</span>
+        <a href="/latency" class="exchange-latency-link">Latency →</a>
       </div>
-      <div class="price-display price-hero" id="binance-price">—</div>
-      <div class="sparkline-wrap"><canvas id="binance-spark" width="400" height="60"></canvas></div>
-      <div class="subsection flex-grow">
-        <div class="subsection-label">Stream log</div>
-        <div class="log" id="binance-log"></div>
-      </div>
-    </section>
+      <div class="exchange-feed-cards" id="exchange-feed-cards"></div>
+    </aside>
   </main>
 
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/js/core.js"></script>
   <script src="/js/layout.js"></script>
   <script src="/js/pages/live.js"></script>

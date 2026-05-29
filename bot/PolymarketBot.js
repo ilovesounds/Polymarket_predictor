@@ -27,6 +27,7 @@ const {
   buildOpenPositionRow,
   formatMarketWindowLabel,
   formatExitLog,
+  formatEntryLog,
   settleAtResolution,
 } = require('../paper/portfolio');
 const { getMidpoint, subscribeClobAssets, getMarketResolution } = require('../api/polymarket_runtime');
@@ -35,12 +36,26 @@ const {
   isMarketPastEnd,
   isNearResolutionPrice,
 } = require('../lib/marketResolution');
-const { isTradeLimitReached } = require('../lib/botRunConfig');
-const { resolveStopThreshold, passesEntryPriceBand } = require('../lib/botProfile');
+const { isTradeLimitReached, runStopMessage, buildRunProgressSnapshot } = require('../lib/botRunConfig');
+const {
+  resolveStopThreshold,
+  passesEntryPriceBand,
+  entryWindowLabel,
+  entryWindowPreview,
+  stopLossPreview,
+} = require('../lib/botProfile');
 const { loadCashAdjustmentState } = require('../lib/cashAdjustments');
 const { PriceBufferStore, BTC_BUFFER_KEY } = require('../lib/priceRingBuffer');
 const { recordStreamLatency } = require('../monitoring/latency');
-const { MarketScanner, buildWatchlist } = require('./MarketScanner');
+const { isWindowActive } = require('../lib/marketSelection');
+const {
+  listOpenPositions,
+  openConditionIds,
+  positionsForMarket,
+  openCountForMarket,
+  conditionIdFromPosition,
+} = require('../lib/openPositions');
+const { MarketScanner, buildEvalMarkets } = require('./MarketScanner');
 const { StrategyRouter } = require('./StrategyRouter');
 const { SessionManager } = require('./SessionManager');
 const {
@@ -94,6 +109,8 @@ class PolymarketBot {
     this.entryCheckLogCache = new Map();
     /** @type {Map<string, number>} */
     this.marketTradeCounts = new Map();
+    /** @type {Map<string, number>} */
+    this.lastEntryTimeByMarket = new Map();
     this.pollTimer = null;
   }
 
@@ -145,7 +162,10 @@ class PolymarketBot {
     if (Number.isFinite(this.config.stopLossPct)) slParts.push(`${this.config.stopLossPct}%`);
     if (Number.isFinite(this.config.stopLossPrice)) slParts.push(`@${this.config.stopLossPrice}`);
     if (!slParts.length) slParts.push(`floor ${this.config.stopThreshold}`);
-    console.log(`  Exit: ${exitLabel} | stop=${slParts.join(' ')} | maxEntries/market=${this.config.maxTradesPerMarket}`);
+    const wm = this.config.allowedWindows[0] || 5;
+    console.log(`  ${stopLossPreview(this.stopProfile, 0.5, this.router?.strategies?.[0]?.stop)}`);
+    console.log(`  ${entryWindowPreview(this.entryRules, wm)} (per-window defaults if unset)`);
+    console.log(`  Exit: ${exitLabel} | stop=${slParts.join(' ')} | ${this.reEntryModeLabel()}`);
     console.log(`  Price path: ${this.config.useWsEval ? `CLOB WS (throttle ${this.config.wsEvalThrottleMs}ms) + ${this.config.pollIntervalMs / 1000}s discovery tick` : `REST poll ${this.config.pollIntervalMs / 1000}s`}`);
     console.log(`${'═'.repeat(50)}\n`);
 
@@ -164,23 +184,27 @@ class PolymarketBot {
       await this.startNatsBot();
     }
 
-    try {
-      const provider = new ethers.JsonRpcProvider(this.config.polygonRpc);
-      await provider.getNetwork();
-      setInterval(() => pollChainlink(provider), 30_000);
-      await pollChainlink(provider);
-    } catch (e) {
-      console.warn('[Setup] Chainlink polling disabled (RPC unavailable)');
+    if (this.config.chainlinkEnabled) {
+      try {
+        const provider = new ethers.JsonRpcProvider(this.config.polygonRpc);
+        await provider.getNetwork();
+        setInterval(() => pollChainlink(provider), 30_000);
+        await pollChainlink(provider);
+        console.log('[Setup] Chainlink feed connected');
+      } catch (_) {
+        console.warn('[Setup] Chainlink unavailable — using Binance for price to beat');
+      }
+    } else {
+      console.log('[Setup] Chainlink optional — using Binance for price to beat');
     }
 
     this.recentResolutions = await this.scanner.fetchRecentResolutions(10);
     console.log('[Setup] Binance feed connected');
-    console.log('[Setup] Chainlink status initialized');
     console.log('[Setup] Ready to trade\n');
   }
 
   hasOpenPositions() {
-    return Object.keys(this.openPositions).length > 0;
+    return listOpenPositions(this.openPositions).length > 0;
   }
 
   syncPositionValuationLoop() {
@@ -198,8 +222,22 @@ class PolymarketBot {
     }, this.config.positionValuationMs);
   }
 
+  reEntryModeLabel() {
+    if (this.config.tradesPerMarket === 'multiple') {
+      const cooldown = this.config.minSecondsBetweenEntries > 0
+        ? `, ${this.config.minSecondsBetweenEntries}s cooldown`
+        : '';
+      const mode = this.config.multiEntryMode || 'sequential';
+      if (mode === 'sequential') {
+        return `re-entry: sequential (max ${this.config.maxTradesPerMarket} per window${cooldown})`;
+      }
+      return `re-entry: simultaneous (max ${this.config.maxTradesPerMarket} open${cooldown})`;
+    }
+    return 're-entry: one trade per market';
+  }
+
   async publishPortfolioUpdate() {
-    const positions = Object.values(this.openPositions);
+    const positions = listOpenPositions(this.openPositions);
     const marks = await Promise.allSettled(
       positions.map(async (position) => {
         const buffered = this.priceBuffers.latest(position.market.conditionId);
@@ -234,6 +272,26 @@ class PolymarketBot {
     });
   }
 
+  async publishRunProgress() {
+    const progress = buildRunProgressSnapshot(this.sessionState);
+    try {
+      const { publishDashboardEvent } = require('../dashboard/hub');
+      publishDashboardEvent({
+        type: 'run_progress',
+        ...progress,
+        running: !this.botShouldStop,
+        stopReason: this.botStopReason,
+      });
+    } catch (_) {}
+    await this.publishBotStatus({
+      ...progress,
+      tradesEntered: this.sessionState.tradesEntered,
+      marketsTradedCount: this.sessionState.marketsTradedCount,
+      runLimit: this.sessionState.runDuration?.runMode || this.sessionState.runLimit.mode,
+      stopReason: this.botStopReason,
+    });
+  }
+
   async publishBotStatus(extra = {}) {
     if (!this.natsBridge) return;
     const { SUBJECTS } = require('../lib/nats/subjects');
@@ -248,7 +306,7 @@ class PolymarketBot {
         portfolio: computePortfolioMetrics({
           cash: this.cash,
           startingCash: this.startingCash,
-          ...summarizeOpenPositions(Object.values(this.openPositions)),
+          ...summarizeOpenPositions(listOpenPositions(this.openPositions)),
         }).portfolio,
         ...extra,
       })
@@ -259,8 +317,9 @@ class PolymarketBot {
     if (this.botShouldStop) return;
     this.botShouldStop = true;
     this.botStopReason = reason;
-    console.log(`[Bot] Session limit reached (${reason}) — no new entries; managing open positions then exit`);
-    this.publishBotStatus({ stopReason: reason }).catch(() => {});
+    const msg = runStopMessage(this.sessionState, reason);
+    console.log(`[BotStop] ${msg} — no new entries; managing open positions then exit`);
+    this.publishRunProgress().catch(() => {});
   }
 
   checkSessionLimits() {
@@ -281,6 +340,15 @@ class PolymarketBot {
     const key = cacheKey || `${market.conditionId}:skip`;
     const sig = String(reason);
     if (!this.shouldLogEntryCheck(key, sig)) return;
+    this._emitEntrySkip(market, reason);
+  }
+
+  /** Always log — used when EntryCheck met=YES but execution blocked on the next gate. */
+  logImmediateEntrySkip(market, reason) {
+    this._emitEntrySkip(market, reason);
+  }
+
+  _emitEntrySkip(market, reason) {
     const line = `[Skip] ${formatWindowLabel(market.windowMinutes)} ${marketLabel(market)} | ${reason}`;
     console.log(`[EntrySkip] ${formatWindowLabel(market.windowMinutes)} ${marketLabel(market)} | ${reason}`);
     try {
@@ -298,7 +366,7 @@ class PolymarketBot {
 
   maybeExitWhenStopped() {
     if (!this.botShouldStop || this.hasOpenPositions()) return;
-    console.log(`[Bot] Stopped (${this.botStopReason || 'requested'})`);
+    console.log(`[BotStop] Process exiting (${this.botStopReason || 'requested'})`);
     setTimeout(() => process.exit(0), 250);
   }
 
@@ -362,7 +430,11 @@ class PolymarketBot {
       }, { dedup: false });
       await this.publishBotStatus({ startedAt: Date.now() });
     } catch (e) {
-      console.warn('[Bot] NATS control unavailable — continuing without NATS:', e.message);
+      console.warn(
+        '[Bot] NATS control unavailable — continuing without NATS (HTTP dashboard control still works):',
+        e.message,
+        '— set NATS_URL=disabled and USE_NATS=false to silence'
+      );
       if (this.natsBridge) {
         await this.natsBridge.close().catch(() => {});
         this.natsBridge = null;
@@ -406,11 +478,7 @@ class PolymarketBot {
       this.maybeExitWhenStopped();
       return;
     }
-    await this.publishBotStatus({
-      tradesEntered: this.sessionState.tradesEntered,
-      runLimit: this.sessionState.runLimit.mode,
-      stopReason: this.botStopReason,
-    });
+    await this.publishRunProgress();
     await this.publishPortfolioUpdate();
 
     if (this.cash <= 0 && !this.hasOpenPositions()) {
@@ -419,9 +487,15 @@ class PolymarketBot {
     }
 
     const cycleStart = new Date();
-    const openMetrics = summarizeOpenPositions(Object.values(this.openPositions));
+    const markedRows = listOpenPositions(this.openPositions).map((position) => {
+      const mark = this.priceBuffers.latest(position.market.conditionId)
+        ?? position.lastMarkPrice
+        ?? position.entryPrice;
+      return buildOpenPositionRow(position, mark);
+    });
+    const openMetrics = summarizeOpenPositions(markedRows);
     const cyclePortfolio = this.cash + (openMetrics.openPositionValue || 0);
-    console.log(`\n[Cycle] ${cycleStart.toISOString()} | cash=$${this.cash.toFixed(2)} | portfolio=$${cyclePortfolio.toFixed(2)} | openPositions=${Object.keys(this.openPositions).length}`);
+    console.log(`\n[Cycle] ${cycleStart.toISOString()} | cash=$${this.cash.toFixed(2)} | portfolio=$${cyclePortfolio.toFixed(2)} | openPositions=${listOpenPositions(this.openPositions).length}`);
 
     let markets;
     try {
@@ -431,7 +505,7 @@ class PolymarketBot {
       return;
     }
 
-    const openCount = Object.keys(this.openPositions).length;
+    const openCount = listOpenPositions(this.openPositions).length;
     const resolutionLimit = Math.max(25, openCount * 3);
     try {
       this.recentResolutions = await this.scanner.fetchRecentResolutions(resolutionLimit);
@@ -448,7 +522,7 @@ class PolymarketBot {
     this.rebuildTokenIndex(markets);
 
     await Promise.allSettled(
-      Object.values(this.openPositions).map((position) => {
+      listOpenPositions(this.openPositions).map((position) => {
         const maybeActive = markets.find((m) => m.conditionId === position.market.conditionId);
         return this.checkExit(
           maybeActive || position.market,
@@ -482,16 +556,20 @@ class PolymarketBot {
     if (this.config.useWsEval) {
       this.resyncClobWs(markets);
       if (tradableMarkets.length) {
-        const watchlist = buildWatchlist(
+        const evalMarkets = buildEvalMarkets(
           markets,
           this.openPositions,
-          this.config.allowedWindows,
-          this.entryRules
+          this.config.allowedWindows
         );
-        await Promise.allSettled(watchlist.map((market) => this.evaluateMarket(market)));
+        await Promise.allSettled(evalMarkets.map((market) => this.evaluateMarket(market)));
       }
     } else if (tradableMarkets.length) {
-      await Promise.allSettled(tradableMarkets.map((market) => this.evaluateMarket(market)));
+      const evalMarkets = buildEvalMarkets(
+        markets,
+        this.openPositions,
+        this.config.allowedWindows
+      );
+      await Promise.allSettled(evalMarkets.map((market) => this.evaluateMarket(market)));
     }
 
     this.maybeExitWhenStopped();
@@ -502,7 +580,9 @@ class PolymarketBot {
   }
 
   async refreshResolutionOutcomesForOpenPositions(resolvedMap) {
-    const tasks = Object.entries(this.openPositions).map(async ([cid, position]) => {
+    const tasks = listOpenPositions(this.openPositions).map(async (position) => {
+      const cid = conditionIdFromPosition(position);
+      if (!cid) return;
       if (resolvedMap.get(cid) === 'Yes' || resolvedMap.get(cid) === 'No') return;
       const market = position.market || {};
       if (!isMarketPastEnd(market)) return;
@@ -531,18 +611,17 @@ class PolymarketBot {
   }
 
   collectWsAssetIds(markets) {
-    const watchlist = buildWatchlist(
+    const evalMarkets = buildEvalMarkets(
       markets,
       this.openPositions,
-      this.config.allowedWindows,
-      this.entryRules
+      this.config.allowedWindows
     );
     const ids = new Set();
-    for (const m of watchlist) {
+    for (const m of evalMarkets) {
       if (m.tokenIdYes) ids.add(m.tokenIdYes);
       if (m.tokenIdNo) ids.add(m.tokenIdNo);
     }
-    for (const pos of Object.values(this.openPositions)) {
+    for (const pos of listOpenPositions(this.openPositions)) {
       const tid = pos.tokenIdYes || pos.market?.tokenIdYes;
       if (tid) ids.add(tid);
     }
@@ -581,7 +660,7 @@ class PolymarketBot {
           meta: { eventType, marketId: market.conditionId.slice(0, 12) },
         });
       }
-      if (this.openPositions[market.conditionId]) {
+      if (openCountForMarket(this.openPositions, market.conditionId) > 0) {
         this.scheduleWsExitCheck(market);
       } else if (!this.botShouldStop) {
         this.scheduleWsEval(market);
@@ -606,10 +685,12 @@ class PolymarketBot {
     if (prev) clearTimeout(prev);
     const timer = setTimeout(() => {
       this.wsExitTimers.delete(id);
-      const position = this.openPositions[id];
-      if (!position) return;
+      const positions = positionsForMarket(this.openPositions, id);
+      if (!positions.length) return;
       const resolvedOutcome = this.resolutionByConditionId.get(id) || null;
-      this.checkExit(market, position, resolvedOutcome).catch(() => {});
+      for (const position of positions) {
+        this.checkExit(market, position, resolvedOutcome).catch(() => {});
+      }
     }, this.config.wsEvalThrottleMs);
     this.wsExitTimers.set(id, timer);
   }
@@ -631,42 +712,81 @@ class PolymarketBot {
     const now = Date.now();
     const timeRemaining = Math.max(0, (market.endTime - now) / 1000);
 
-    if (!isWithinTradingWindow(market, timeRemaining, this.entryRules)) {
-      this.logEntrySkip(
+    const cid = market.conditionId;
+    const openInMarket = positionsForMarket(this.openPositions, cid);
+    for (const pos of openInMarket) {
+      await this.checkExit(
         market,
-        `timeRemaining ${Math.round(timeRemaining)}s outside entry window (${formatWindowLabel(market.windowMinutes)})`,
-        `${market.conditionId}:tte`
+        pos,
+        this.resolutionByConditionId.get(cid) || null
       );
-      return;
     }
 
-    const tradesInMarket = this.marketTradeCounts.get(market.conditionId) || 0;
-    if (tradesInMarket >= this.config.maxTradesPerMarket) {
-      this.logEntrySkip(
-        market,
-        `max ${this.config.maxTradesPerMarket} trade(s) per market already used (${tradesInMarket})`,
-        `${market.conditionId}:max_trades`
-      );
-      return;
-    }
-
-    if (this.openPositions[market.conditionId]) {
-      const resolvedOutcome = this.resolutionByConditionId.get(market.conditionId) || null;
-      await this.checkExit(market, this.openPositions[market.conditionId], resolvedOutcome);
-      return;
+    const openCount = openCountForMarket(this.openPositions, cid);
+    if (this.config.tradesPerMarket === 'single') {
+      if (openCount > 0) {
+        this.logEntrySkip(
+          market,
+          'one trade per market — open position exists',
+          `${cid}:single_open`
+        );
+        return;
+      }
+    } else {
+      const maxTrades = this.config.maxTradesPerMarket;
+      const entryMode = this.config.multiEntryMode || 'sequential';
+      const entriesThisWindow = this.marketTradeCounts.get(cid) || 0;
+      if (entryMode === 'sequential') {
+        if (openCount > 0) {
+          this.logEntrySkip(
+            market,
+            'sequential mode — wait until open position closes',
+            `${cid}:sequential_open`
+          );
+          return;
+        }
+        if (entriesThisWindow >= maxTrades) {
+          this.logEntrySkip(
+            market,
+            `max ${maxTrades} entries per window (${entriesThisWindow})`,
+            `${cid}:max_entries`
+          );
+          return;
+        }
+      } else if (openCount >= maxTrades) {
+        this.logEntrySkip(
+          market,
+          `max ${maxTrades} open position(s) per market (${openCount})`,
+          `${cid}:max_open`
+        );
+        return;
+      }
+      const minGap = this.config.minSecondsBetweenEntries || 0;
+      if (minGap > 0) {
+        const lastEntry = this.lastEntryTimeByMarket.get(cid);
+        if (lastEntry) {
+          const elapsedSec = (Date.now() - lastEntry) / 1000;
+          if (elapsedSec < minGap) {
+            const remain = Math.ceil(minGap - elapsedSec);
+            this.logEntrySkip(
+              market,
+              `re-entry cooldown — ${remain}s remaining`,
+              `${cid}:cooldown`
+            );
+            return;
+          }
+        }
+      }
     }
 
     try {
-      const watchlist = buildWatchlist(
-        this.cachedMarkets.length ? this.cachedMarkets : [market],
-        this.openPositions,
-        this.config.allowedWindows,
-        this.entryRules
-      );
-      const inWatchlist = watchlist.some((m) => m.conditionId === market.conditionId);
+      const inEntryBand = isWithinTradingWindow(market, timeRemaining, this.entryRules);
+      const fetchOrderbook = inEntryBand
+        || isWindowActive(market, now)
+        || openCountForMarket(this.openPositions, cid) > 0;
       const cachedYes = opts.fromWs ? this.priceBuffers.latest(market.conditionId) : null;
       const scan = await this.scanner.enrichForStrategy(market, {
-        fetchOrderbook: inWatchlist,
+        fetchOrderbook,
         cachedYesPrice: cachedYes,
       });
       const { yesPrice, liquidityDepth, book, enriched } = scan;
@@ -685,7 +805,8 @@ class PolymarketBot {
       this.strategyId = chosenStrategyId;
 
       const entryEligible = Boolean(decision?.entryEligible);
-      const strategyStop = Number.isFinite(decision?.stop) ? decision.stop : strategy.stop;
+      const rawStrategyStop = Number.isFinite(decision?.stop) ? decision.stop : strategy.stop;
+      const strategyStop = resolveStopThreshold(yesPrice, this.stopProfile, rawStrategyStop);
       const previewSizing = previewBetSize(this.cash, sizingConfig, {
         entry: yesPrice,
         stop: strategyStop,
@@ -755,20 +876,34 @@ class PolymarketBot {
         return;
       }
 
+      if (!inEntryBand) {
+        const band = entryWindowLabel(this.entryRules, market.windowMinutes);
+        const skipReason = `strategy met but timeRemaining ${Math.round(timeRemaining)}s outside entry window (${formatWindowLabel(market.windowMinutes)}; ${band})`;
+        if (logEntryCheck) {
+          this.logImmediateEntrySkip(market, skipReason);
+        } else {
+          this.logEntrySkip(market, skipReason, `${market.conditionId}:tte`);
+        }
+        return;
+      }
+
       if (!passesEntryPriceBand(yesPrice, this.entryRules)) {
-        this.logEntrySkip(
-          market,
-          `YES ${fmtPrice(yesPrice)} outside entry price band`,
-          `${market.conditionId}:price_band`
-        );
+        const skipReason = `YES ${fmtPrice(yesPrice)} outside entry price band`;
+        if (logEntryCheck) {
+          this.logImmediateEntrySkip(market, skipReason);
+        } else {
+          this.logEntrySkip(market, skipReason, `${market.conditionId}:price_band`);
+        }
         return;
       }
 
       if (paramGate.shouldSkip) {
-        this.logEntrySkip(
-          market,
-          `microstructure gate (${paramGate.gateMode}): ${paramGate.blocks.join('; ')}`
-        );
+        const skipReason = `microstructure gate (${paramGate.gateMode}): ${paramGate.blocks.join('; ')}`;
+        if (logEntryCheck) {
+          this.logImmediateEntrySkip(market, skipReason);
+        } else {
+          this.logEntrySkip(market, skipReason, `${market.conditionId}:gate`);
+        }
         return;
       }
       if (paramGate.warnings.length && logEntryCheck) {
@@ -836,14 +971,13 @@ class PolymarketBot {
         : sizingConfig.sizingMode === 'kelly' && liquidityDepth < 500
           ? `kelly sizing blocked (depth $${liquidityDepth.toFixed(0)} < $500 min)`
           : `sizing=${sizingConfig.sizingMode} returned $0`;
-      this.logEntrySkip(market, reason, `${market.conditionId}:sizing`);
+      this.logImmediateEntrySkip(market, reason);
       return;
     }
     if (betSize > this.cash) {
-      this.logEntrySkip(
+      this.logImmediateEntrySkip(
         market,
-        `insufficient cash $${this.cash.toFixed(2)} < bet $${betSize.toFixed(2)}`,
-        `${market.conditionId}:cash`
+        `insufficient cash $${this.cash.toFixed(2)} < bet $${betSize.toFixed(2)}`
       );
       return;
     }
@@ -867,9 +1001,11 @@ class PolymarketBot {
       `[PositionOpen] ${profilePrefix}${marketLabel(market)} | sizing=${sizingLabel} | size=$${betSize.toFixed(2)} | shares=${shares.toFixed(2)} YES | entry=${fmtPrice(yesPrice)} | stop=${signal.stop.toFixed(3)}${exitNote} | depth=${liquidityDepth.toFixed(0)} | depthFetch=${depthFetchEnd - depthFetchStart}ms${winRateLog}`
     );
 
+    const entryIndex = (this.marketTradeCounts.get(market.conditionId) || 0) + 1;
     const tradeId = `${this.paperTrade ? 'paper' : 'live'}-${market.conditionId}-${++this.liveTradeSeq}`;
-    this.openPositions[market.conditionId] = {
+    this.openPositions[tradeId] = {
       tradeId,
+      entryIndex,
       signal,
       entryPrice: yesPrice,
       betSize,
@@ -904,19 +1040,25 @@ class PolymarketBot {
     });
 
     this.session.recordTradeEntered(this.sessionState);
-    this.marketTradeCounts.set(
-      market.conditionId,
-      (this.marketTradeCounts.get(market.conditionId) || 0) + 1
-    );
+    this.marketTradeCounts.set(market.conditionId, entryIndex);
+    this.lastEntryTimeByMarket.set(market.conditionId, depthSetAt);
     this.entryCheckLogCache.delete(market.conditionId);
     this.entryCheckLogCache.delete(`${market.conditionId}:sizing`);
     if (isTradeLimitReached(this.sessionState)) {
-      this.requestBotStop('trade_limit');
+      this.requestBotStop('market_limit');
     }
     this.checkSessionLimits();
 
     this.syncPositionValuationLoop();
     await this.publishPortfolioUpdate();
+    const entryLogLine = formatEntryLog({
+      direction: signal.direction,
+      shares,
+      entryPrice: yesPrice,
+      betSize,
+      market,
+      entryIndex,
+    });
     emitTradeEvent({
       eventType: 'entry',
       tradeId,
@@ -942,6 +1084,8 @@ class PolymarketBot {
       cashBefore,
       cashAfter,
       latencyTiming,
+      entryIndex,
+      logLine: entryLogLine,
     });
   }
 
@@ -963,15 +1107,15 @@ class PolymarketBot {
       position.lastMarkPrice = currentPrice;
       position.lastMarkAt = Date.now();
       const unrealizedPnl = calcRealizedPnl(shares, entryPrice, currentPrice, betSize);
+      const stopThreshold = resolveStopThreshold(entryPrice, this.stopProfile, signal?.stop);
+      const stopActive = Number.isFinite(stopThreshold) && stopThreshold > 0;
       const targetHint = exitMode === 'fixed_price' && Number.isFinite(exitTargetPrice)
         ? ` | tp@${exitTargetPrice.toFixed(2)}`
         : ' | hold→resolve';
+      const stopHint = stopActive ? ` | stop@${stopThreshold.toFixed(2)}` : '';
       console.log(
-        `[Position] ${marketLabel(market)} | yes=${fmtPrice(currentPrice)} | entry=${fmtPrice(entryPrice)} | shares=${shares.toFixed(2)} | unrealized=$${unrealizedPnl.toFixed(2)}${targetHint}`
+        `[Position] ${marketLabel(market)} | yes=${fmtPrice(currentPrice)} | entry=${fmtPrice(entryPrice)} | shares=${shares.toFixed(2)} | unrealized=$${unrealizedPnl.toFixed(2)}${stopHint}${targetHint}`
       );
-
-      const stopThreshold = resolveStopThreshold(entryPrice, this.stopProfile, signal?.stop);
-      const stopActive = Number.isFinite(stopThreshold) && stopThreshold > 0;
       const marketExpired = isMarketPastEnd(market);
 
       let settlementOutcome = resolveSettlementOutcome({
@@ -1049,7 +1193,7 @@ class PolymarketBot {
       this.realizedPnlTotal += pnl;
       const cashAfter = this.cash;
 
-      delete this.openPositions[market.conditionId];
+      delete this.openPositions[position.tradeId];
       this.syncPositionValuationLoop();
 
       if (exitReason === 'resolution') {

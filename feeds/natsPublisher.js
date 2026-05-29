@@ -5,10 +5,14 @@
 const { connectBinanceFeed } = require('../api/feeds_runtime');
 const {
   getActiveBTCShortMarkets,
+  listLiveBTCMarketsForWindow,
+  fetchLiveMarketsForMode,
+  getMarketDetails,
   subscribeClobAssets,
   pairYesNoPrices,
   getMidpoint,
   getOrderBook,
+  parseWindowStartMs,
 } = require('../api/polymarket_runtime');
 const {
   normalizePolyMode,
@@ -16,6 +20,7 @@ const {
   filterLiveMarketsForMode,
   pickPrimaryLiveMarket,
   primaryNeedsRoll,
+  shouldIgnorePreferredId,
 } = require('../lib/marketSelection');
 const { createNatsBridge } = require('../lib/natsBridge');
 const { SUBJECTS } = require('../lib/nats/subjects');
@@ -43,7 +48,10 @@ selectedPolyMode = normalizePolyMode(selectedPolyMode);
 
 function syncPrimaryMarketId(preferredId = selectedPrimaryMarketId) {
   lastMarkets = filterLiveMarketsForMode(lastMarkets, selectedPolyMode);
-  const primary = pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, preferredId);
+  const effectivePreferred = shouldIgnorePreferredId(preferredId, lastMarkets, selectedPolyMode)
+    ? null
+    : preferredId;
+  const primary = pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, effectivePreferred);
   if (primary) selectedPrimaryMarketId = primary.conditionId;
   else selectedPrimaryMarketId = null;
   return primary;
@@ -113,7 +121,7 @@ async function subscribePolymarketMarkets() {
 
   let markets;
   try {
-    markets = await getActiveBTCShortMarkets(modeToWindows(selectedPolyMode));
+    markets = await fetchLiveMarketsForMode(selectedPolyMode);
     lastMarkets = filterLiveMarketsForMode(markets, selectedPolyMode);
   } catch (e) {
     console.error('[feeds/nats] markets error:', e.message);
@@ -215,7 +223,7 @@ async function subscribePolymarketMarkets() {
 async function maybeRollPrimaryMarket() {
   const previousId = selectedPrimaryMarketId;
   const current = lastMarkets.find((m) => m.conditionId === previousId) || getPrimaryMarket();
-  if (!primaryNeedsRoll(current)) return false;
+  if (!primaryNeedsRoll(current, lastMarkets, selectedPolyMode)) return false;
   await subscribePolymarketMarkets();
   return Boolean(selectedPrimaryMarketId && selectedPrimaryMarketId !== previousId);
 }

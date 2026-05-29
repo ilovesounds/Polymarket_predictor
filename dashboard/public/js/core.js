@@ -11,6 +11,14 @@
   const marketPrices = new Map();
 
   const PRIMARY_STORAGE_KEY = 'dashboardPrimaryMarketId';
+  const FOLLOW_LIVE_KEY = 'dashboardFollowLiveWindow';
+  const PRIMARY_PIN_KEYS = [
+    'dashboardPrimaryMarketId',
+    'selectedPrimaryMarketId',
+    'primaryMarketId',
+  ];
+  const UPCOMING_PRIMARY_MAX_LEAD_MS = 2 * 60_000;
+  const isLivePage = () => document.body?.dataset?.page === 'live';
 
   const state = {
     selectedPolyMode: '15m',
@@ -22,7 +30,7 @@
     binanceConnected: false,
     polymarketConnected: false,
     natsConnected: false,
-    bot: { running: false, mode: 'paper', cash: Number.NaN },
+    bot: { running: false, mode: 'paper', cash: Number.NaN, runProgress: null },
     portfolio: {
       mode: 'paper',
       cash: Number.NaN,
@@ -40,6 +48,10 @@
     },
     activePolyMarkets: [],
     primaryPoly: null,
+    primaryPhase: null,
+    hasActiveWindow: true,
+    showingUpcomingOnly: false,
+    nextStartInMs: null,
     polyLatest: { yes: null, no: null },
     lastOrderbook: null,
     btcSpot: null,
@@ -47,6 +59,8 @@
     priceToBeat: null,
     priceToBeatSource: null,
     windowStartTime: null,
+    followLiveWindow: true,
+    btcHistory: [],
   };
 
   function fmtTs(ts) {
@@ -77,6 +91,37 @@
   function fmtSize(v) {
     if (!Number.isFinite(v)) return '—';
     return v.toFixed(2);
+  }
+
+  function isFollowLiveWindow() {
+    if (isLivePage()) return state.followLiveWindow !== false;
+    try {
+      const stored = localStorage.getItem(FOLLOW_LIVE_KEY);
+      if (stored === '0') return false;
+      if (stored === '1') return true;
+    } catch (_) {}
+    return true;
+  }
+
+  function setFollowLiveWindow(enabled) {
+    state.followLiveWindow = enabled !== false;
+    try {
+      if (state.followLiveWindow) localStorage.setItem(FOLLOW_LIVE_KEY, '1');
+      else localStorage.setItem(FOLLOW_LIVE_KEY, '0');
+    } catch (_) {}
+  }
+
+  function clearPinnedPrimaryKeys() {
+    for (const key of PRIMARY_PIN_KEYS) {
+      try { localStorage.removeItem(key); } catch (_) {}
+    }
+    state.selectedMarketId = null;
+  }
+
+  function initLivePagePreferences() {
+    if (!isLivePage()) return;
+    setFollowLiveWindow(true);
+    clearPinnedPrimaryKeys();
   }
 
   function fmtCountdown(ms) {
@@ -260,6 +305,7 @@
     if (msg.bot) {
       if (typeof msg.bot.running === 'boolean') state.bot.running = msg.bot.running;
       if (typeof msg.bot.mode === 'string') state.bot.mode = msg.bot.mode;
+      if (msg.bot.runProgress) state.bot.runProgress = msg.bot.runProgress;
       if (Number.isFinite(msg.bot.cash)) state.bot.cash = msg.bot.cash;
       else if (Number.isFinite(msg.bot.bankroll)) state.bot.cash = msg.bot.bankroll;
       if (msg.bot.strategyId) state.selectedStrategy = msg.bot.strategyId;
@@ -273,22 +319,115 @@
     if (Number.isFinite(market.windowStartTime)) state.windowStartTime = market.windowStartTime;
   }
 
-  function pickPrimaryFromMarkets(markets) {
-    const selectedWindow = modeToWindow(state.selectedPolyMode);
-    const now = Date.now();
-    const live = (markets || [])
-      .filter((m) => m?.conditionId && Number.isFinite(m.endTime) && m.endTime > now)
-      .filter((m) => !selectedWindow || m.windowMinutes === selectedWindow)
-      .sort((a, b) => a.endTime - b.endTime);
-    const storedId = state.selectedMarketId || localStorage.getItem(PRIMARY_STORAGE_KEY);
-    if (storedId) {
-      const picked = live.find((m) => m.conditionId === storedId);
-      if (picked) return picked;
-    }
-    return live[0] || null;
+  function parseSlugStartMs(slug) {
+    const m = String(slug || '').match(/btc-updown-(?:5m|15m|1d|4h)-(\d{9,11})$/i);
+    if (!m) return null;
+    const ts = Number(m[1]);
+    return Number.isFinite(ts) ? ts * 1000 : null;
   }
 
-  function setPrimaryMarketLocal(market) {
+  function windowStartMs(market) {
+    const fromSlug = parseSlugStartMs(market?.slug);
+    if (fromSlug) return fromSlug;
+    if (Number.isFinite(market?.windowStartTime)) return market.windowStartTime;
+    if (Number.isFinite(market?.endTime) && market?.windowMinutes) {
+      return market.endTime - market.windowMinutes * 60_000;
+    }
+    return null;
+  }
+
+  function isWindowActive(market, now = Date.now()) {
+    if (!market?.conditionId || !Number.isFinite(market.endTime) || market.endTime <= now) return false;
+    const start = windowStartMs(market);
+    if (!Number.isFinite(start)) return true;
+    return start <= now;
+  }
+
+  function isFarUpcoming(market, now = Date.now()) {
+    if (!market || isWindowActive(market, now)) return false;
+    const start = windowStartMs(market);
+    return Number.isFinite(start) && (start - now) > UPCOMING_PRIMARY_MAX_LEAD_MS;
+  }
+
+  function shouldIgnoreStoredPrimary(markets, storedId, now = Date.now()) {
+    if (!storedId || !markets?.length) return true;
+    const preferred = markets.find((m) => m.conditionId === storedId);
+    if (!preferred) return true;
+    const active = markets.filter((m) => isWindowActive(m, now));
+    if (!active.length) return false;
+    return isFarUpcoming(preferred, now) || !isWindowActive(preferred, now);
+  }
+
+  function pickPrimaryFromMarkets(markets, serverSelectedId = null) {
+    const selectedWindow = modeToWindow(state.selectedPolyMode);
+    const now = Date.now();
+    const open = (markets || [])
+      .filter((m) => m?.conditionId && Number.isFinite(m.endTime) && m.endTime > now)
+      .filter((m) => !selectedWindow || m.windowMinutes === selectedWindow);
+    const active = open.filter((m) => isWindowActive(m, now)).sort((a, b) => a.endTime - b.endTime);
+    const upcoming = open
+      .filter((m) => !isWindowActive(m, now))
+      .sort((a, b) => (windowStartMs(a) || Infinity) - (windowStartMs(b) || Infinity));
+    const nearUpcoming = upcoming.filter((m) => {
+      const start = windowStartMs(m);
+      return !Number.isFinite(start) || (start - now) <= UPCOMING_PRIMARY_MAX_LEAD_MS;
+    });
+    const defaultPick = active[0] || nearUpcoming[0] || null;
+
+    if (isFollowLiveWindow()) {
+      if (serverSelectedId) {
+        const fromServer = open.find((m) => m.conditionId === serverSelectedId);
+        if (fromServer) return fromServer;
+      }
+      return defaultPick;
+    }
+
+    const storedId = state.selectedMarketId || localStorage.getItem(PRIMARY_STORAGE_KEY);
+    if (!storedId || shouldIgnoreStoredPrimary(open, storedId, now)) return defaultPick;
+    const preferred = open.find((m) => m.conditionId === storedId);
+    if (!preferred) return defaultPick;
+    if (isWindowActive(preferred, now)) return preferred;
+    if (active.length) return active[0];
+    const start = windowStartMs(preferred);
+    if (Number.isFinite(start) && (start - now) <= UPCOMING_PRIMARY_MAX_LEAD_MS) return preferred;
+    return defaultPick;
+  }
+
+  function updatePrimarySelectionMeta(markets, primary, msg = {}) {
+    const now = Date.now();
+    const selectedWindow = modeToWindow(state.selectedPolyMode);
+    const open = (markets || state.activePolyMarkets || [])
+      .filter((m) => m?.conditionId && Number.isFinite(m.endTime) && m.endTime > now)
+      .filter((m) => !selectedWindow || m.windowMinutes === selectedWindow);
+    const hasActiveWindow = open.some((m) => isWindowActive(m, now));
+    const phase = primary
+      ? (isWindowActive(primary, now) ? 'active' : 'upcoming')
+      : null;
+    state.hasActiveWindow = typeof msg.hasActiveWindow === 'boolean' ? msg.hasActiveWindow : hasActiveWindow;
+    state.primaryPhase = msg.primaryPhase || phase;
+    state.showingUpcomingOnly = typeof msg.showingUpcomingOnly === 'boolean'
+      ? msg.showingUpcomingOnly
+      : Boolean(primary && phase === 'upcoming' && !state.hasActiveWindow);
+    if (Number.isFinite(msg.nextStartInMs)) state.nextStartInMs = msg.nextStartInMs;
+    else if (!state.hasActiveWindow && open.length) {
+      const next = open.find((m) => !isWindowActive(m, now));
+      const start = next ? windowStartMs(next) : null;
+      state.nextStartInMs = Number.isFinite(start) ? Math.max(0, start - now) : null;
+    } else {
+      state.nextStartInMs = null;
+    }
+  }
+
+  function clearStalePrimaryPreference(markets) {
+    const storedId = localStorage.getItem(PRIMARY_STORAGE_KEY);
+    if (!storedId) return false;
+    if (!shouldIgnoreStoredPrimary(markets, storedId)) return false;
+    localStorage.removeItem(PRIMARY_STORAGE_KEY);
+    state.selectedMarketId = null;
+    return true;
+  }
+
+  function setPrimaryMarketLocal(market, meta = {}, options = {}) {
     if (!market?.conditionId) return;
     if (market.conditionId !== state.primaryPoly?.conditionId) {
       state.polyLatest = { yes: null, no: null };
@@ -297,23 +436,28 @@
       state.windowStartTime = null;
     }
     state.selectedMarketId = market.conditionId;
-    localStorage.setItem(PRIMARY_STORAGE_KEY, market.conditionId);
+    if (!isFollowLiveWindow() || options.persistPin) {
+      localStorage.setItem(PRIMARY_STORAGE_KEY, market.conditionId);
+    } else {
+      try { localStorage.removeItem(PRIMARY_STORAGE_KEY); } catch (_) {}
+    }
     state.primaryPoly = market;
     applyBeatFromMarket(market);
+    updatePrimarySelectionMeta(state.activePolyMarkets, market, meta);
   }
 
   function applyPolymarketMessage(msg) {
     if (msg.type === 'market_selected' && msg.market) {
-      setPrimaryMarketLocal(msg.market);
+      setPrimaryMarketLocal(msg.market, msg);
       return;
     }
     if (msg.type === 'market_rolled' && msg.market) {
-      setPrimaryMarketLocal(msg.market);
+      setPrimaryMarketLocal(msg.market, msg);
       emit({ source: 'system', type: 'market_rolled', ...msg, timestamp: msg.timestamp || Date.now() });
       return;
     }
     if (msg.type === 'market_details' && msg.market?.conditionId === state.selectedMarketId) {
-      setPrimaryMarketLocal({ ...state.primaryPoly, ...msg.market });
+      setPrimaryMarketLocal({ ...state.primaryPoly, ...msg.market }, msg);
       return;
     }
     if (msg.type === 'markets' && Array.isArray(msg.markets)) {
@@ -328,9 +472,16 @@
         if (!Number.isFinite(m.endTime) || m.endTime <= now) return;
         deduped.set(m.conditionId, m);
       });
-      state.activePolyMarkets = [...deduped.values()].sort((a, b) => a.endTime - b.endTime);
-      const nextPrimary = pickPrimaryFromMarkets(state.activePolyMarkets);
-      setPrimaryMarketLocal(nextPrimary);
+      state.activePolyMarkets = [...deduped.values()].sort((a, b) => {
+        const aActive = isWindowActive(a, now);
+        const bActive = isWindowActive(b, now);
+        if (aActive !== bActive) return aActive ? -1 : 1;
+        if (aActive) return a.endTime - b.endTime;
+        return (windowStartMs(a) || Infinity) - (windowStartMs(b) || Infinity);
+      });
+      clearStalePrimaryPreference(state.activePolyMarkets);
+      const nextPrimary = pickPrimaryFromMarkets(state.activePolyMarkets, msg.selectedMarketId);
+      setPrimaryMarketLocal(nextPrimary, msg);
       return;
     }
     if (msg.type === 'price') {
@@ -404,6 +555,7 @@
       if (typeof msg.mode === 'string') state.bot.mode = msg.mode;
       if (Number.isFinite(msg.cash)) state.bot.cash = msg.cash;
       else if (Number.isFinite(msg.bankroll)) state.bot.cash = msg.bankroll;
+      if (msg.runProgress) state.bot.runProgress = msg.runProgress;
     }
     if (Number.isFinite(msg.cashAfter)) state.bot.cash = msg.cashAfter;
     else if (Number.isFinite(msg.bankrollAfter)) state.bot.cash = msg.bankrollAfter;
@@ -463,6 +615,9 @@
       if (Number.isFinite(msg.price)) state.btcSpot = msg.price;
       if (Number.isFinite(msg.chainlinkPrice)) state.chainlinkSpot = msg.chainlinkPrice;
     }
+    if (msg.source === 'binance' && msg.type === 'history' && Array.isArray(msg.history)) {
+      state.btcHistory = msg.history.filter((p) => Number.isFinite(p?.t) && Number.isFinite(p?.p));
+    }
     emit(msg);
   }
 
@@ -487,11 +642,37 @@
     };
   }
 
+  function sendLiveInit() {
+    if (!isLivePage() || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      source: 'client',
+      type: 'live_init',
+      followLive: isFollowLiveWindow(),
+      mode: state.selectedPolyMode,
+      selectedMarketId: isFollowLiveWindow() ? null : state.selectedMarketId,
+      timestamp: Date.now(),
+    }));
+  }
+
+  function sendFollowLive(enabled) {
+    setFollowLiveWindow(enabled);
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      source: 'client',
+      type: 'follow_live',
+      followLive: enabled !== false,
+      timestamp: Date.now(),
+    }));
+  }
+
   function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.onopen = () => emit({ source: 'system', type: 'ws_open', timestamp: Date.now() });
+    ws.onopen = () => {
+      emit({ source: 'system', type: 'ws_open', timestamp: Date.now() });
+      sendLiveInit();
+    };
     ws.onclose = () => {
       emit({ source: 'system', type: 'ws_close', timestamp: Date.now() });
       clearTimeout(reconnectTimer);
@@ -519,6 +700,7 @@
   }
 
   async function refreshInitialState() {
+    initLivePagePreferences();
     try {
       const [botResp, modeResp] = await Promise.all([
         fetch('/api/bot/status').then((r) => r.json()),
@@ -530,22 +712,41 @@
         try {
           const sync = await postJson('/api/polymarket/mode', { mode: storedMode });
           state.selectedPolyMode = sync.selectedPolyMode || storedMode;
-          if (sync.selectedMarketId) {
+          if (!isFollowLiveWindow() && sync.selectedMarketId) {
             state.selectedMarketId = sync.selectedMarketId;
             localStorage.setItem(PRIMARY_STORAGE_KEY, sync.selectedMarketId);
           } else {
             state.selectedMarketId = null;
-            localStorage.removeItem(PRIMARY_STORAGE_KEY);
+            clearPinnedPrimaryKeys();
           }
         } catch (_) {}
+      } else if (isFollowLiveWindow()) {
+        state.selectedMarketId = null;
+        clearPinnedPrimaryKeys();
       } else {
-        state.selectedMarketId = modeResp.selectedMarketId || null;
-        if (state.selectedMarketId) {
-          localStorage.setItem(PRIMARY_STORAGE_KEY, state.selectedMarketId);
-        } else {
-          localStorage.removeItem(PRIMARY_STORAGE_KEY);
-        }
+        state.selectedMarketId = modeResp.selectedMarketId || localStorage.getItem(PRIMARY_STORAGE_KEY) || null;
       }
+
+      try {
+        const windowKey = state.selectedPolyMode === 'both' || state.selectedPolyMode === 'all'
+          ? '5m'
+          : state.selectedPolyMode;
+        if (['5m', '15m', '1d'].includes(windowKey)) {
+          const marketsResp = await fetch(`/api/markets?window=${encodeURIComponent(windowKey)}`).then((r) => r.json());
+          const markets = marketsResp.markets || [];
+          clearStalePrimaryPreference(markets);
+          const apiPrimary = marketsResp.selectedMarketId;
+          if (isFollowLiveWindow()) {
+            state.selectedMarketId = apiPrimary || null;
+          } else if (apiPrimary && (!state.selectedMarketId || shouldIgnoreStoredPrimary(markets, state.selectedMarketId))) {
+            state.selectedMarketId = apiPrimary;
+            localStorage.setItem(PRIMARY_STORAGE_KEY, apiPrimary);
+          } else if (!state.selectedMarketId && apiPrimary) {
+            state.selectedMarketId = apiPrimary;
+            localStorage.setItem(PRIMARY_STORAGE_KEY, apiPrimary);
+          }
+        }
+      } catch (_) {}
       state.selectedStrategy = botResp.bot?.strategyId || state.selectedStrategy;
       state.strategies = botResp.strategies || [];
       if (botResp.bot) {
@@ -555,10 +756,13 @@
         else if (Number.isFinite(botResp.bot.bankroll)) state.bot.cash = botResp.bot.bankroll;
         if (botResp.bot.marketWindow) state.bot.marketWindow = botResp.bot.marketWindow;
         if (botResp.bot.runLimit) state.bot.runLimit = botResp.bot.runLimit;
+        if (botResp.bot.runMode) state.bot.runMode = botResp.bot.runMode;
+        if (botResp.bot.runProgress) state.bot.runProgress = botResp.bot.runProgress;
       }
       if (botResp.botSession) {
         state.bot.marketWindow = botResp.botSession.marketWindow;
         state.bot.runLimit = botResp.botSession.runLimit;
+        if (botResp.botSession.runMode) state.bot.runMode = botResp.botSession.runMode;
       }
       const portfolioResp = await fetch('/api/portfolio').then((r) => r.json()).catch(() => null);
       if (portfolioResp) {
@@ -571,21 +775,33 @@
 
   async function setPolyMode(mode) {
     localStorage.setItem('dashboardPolyMode', mode);
-    localStorage.removeItem(PRIMARY_STORAGE_KEY);
-    state.selectedMarketId = null;
+    if (isFollowLiveWindow()) {
+      clearPinnedPrimaryKeys();
+    } else {
+      localStorage.removeItem(PRIMARY_STORAGE_KEY);
+      state.selectedMarketId = null;
+    }
     state.primaryPoly = null;
+    state.primaryPhase = null;
+    state.hasActiveWindow = true;
+    state.showingUpcomingOnly = false;
+    state.nextStartInMs = null;
     state.polyLatest = { yes: null, no: null };
     state.priceToBeat = null;
     state.priceToBeatSource = null;
     state.windowStartTime = null;
     const resp = await postJson('/api/polymarket/mode', { mode });
     state.selectedPolyMode = resp.selectedPolyMode || mode;
-    if (resp.selectedMarketId) {
+    if (isFollowLiveWindow()) {
+      state.selectedMarketId = resp.selectedMarketId || null;
+      clearPinnedPrimaryKeys();
+    } else if (resp.selectedMarketId) {
       state.selectedMarketId = resp.selectedMarketId;
       localStorage.setItem(PRIMARY_STORAGE_KEY, resp.selectedMarketId);
     } else {
       localStorage.removeItem(PRIMARY_STORAGE_KEY);
     }
+    if (isLivePage()) sendLiveInit();
     emit({ source: 'system', type: 'mode_changed', selectedPolyMode: state.selectedPolyMode, timestamp: Date.now() });
     return resp;
   }
@@ -630,6 +846,11 @@
     refreshInitialState,
     setPolyMode,
     setPrimaryMarket,
+    setFollowLiveWindow,
+    isFollowLiveWindow,
+    sendFollowLive,
+    sendLiveInit,
+    clearPinnedPrimaryKeys,
     postJson,
     fmtTs,
     fmtPrice,

@@ -11,6 +11,8 @@ const {
   getPriceHistory1Min,
 } = require('../api/polymarket_runtime');
 const { isWithinTradingWindow } = require('./helpers');
+const { partitionOpenMarkets } = require('../lib/marketSelection');
+const { openConditionIds } = require('../lib/openPositions');
 
 function bestFromBook(levels) {
   if (!levels?.length) return null;
@@ -47,7 +49,21 @@ function buildWatchlist(markets, openPositions = {}, allowedWindows = [], entryR
     const timeRemaining = Math.max(0, (m.endTime - now) / 1000);
     if (isWithinTradingWindow(m, timeRemaining, entryRules)) ids.add(m.conditionId);
   }
-  for (const cid of Object.keys(openPositions || {})) {
+  for (const cid of openConditionIds(openPositions)) {
+    ids.add(cid);
+  }
+  return (markets || []).filter((m) => ids.has(m.conditionId));
+}
+
+/**
+ * Markets to evaluate each cycle: active window slots + open positions.
+ * Unlike buildWatchlist, includes the full live window so EntryCheck runs
+ * before the narrow entry-timing band (tte 30–270s on 5m).
+ */
+function buildEvalMarkets(markets, openPositions = {}, allowedWindows = []) {
+  const { active } = partitionOpenMarkets(markets, allowedWindows);
+  const ids = new Set(active.map((m) => m.conditionId));
+  for (const cid of openConditionIds(openPositions)) {
     ids.add(cid);
   }
   return (markets || []).filter((m) => ids.has(m.conditionId));
@@ -161,4 +177,5 @@ module.exports = {
   spreadFromBook,
   bestFromBook,
   buildWatchlist,
+  buildEvalMarkets,
 };

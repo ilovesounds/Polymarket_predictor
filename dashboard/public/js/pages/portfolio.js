@@ -1,5 +1,6 @@
 (() => {
   const D = window.Dashboard;
+  const MAX_TRADE_LOG = 40;
 
   const cashEl = document.getElementById('portfolio-cash');
   const startingEl = document.getElementById('portfolio-starting');
@@ -9,7 +10,6 @@
   const equityEl = document.getElementById('portfolio-equity');
   const roiEl = document.getElementById('portfolio-roi');
   const openCountEl = document.getElementById('portfolio-open-count');
-  const modeEl = document.getElementById('portfolio-mode');
   const positionsBody = document.getElementById('portfolio-positions-body');
   const tradeLog = document.getElementById('portfolio-trade-log');
   const tradeCountEl = document.getElementById('portfolio-trade-count');
@@ -64,7 +64,6 @@
     if (openCountEl) {
       openCountEl.textContent = String(portfolio.openPositionCount ?? portfolio.openPositions?.length ?? 0);
     }
-    if (modeEl) modeEl.textContent = portfolio.mode || 'paper';
   }
 
   function renderPositions(openPositions = []) {
@@ -80,12 +79,15 @@
     positionsBody.innerHTML = openPositions.map((pos) => {
       const market = pos.question || pos.marketId || '—';
       const window = pos.windowLabel || (pos.windowMinutes ? `${pos.windowMinutes}m` : '—');
+      const entryTag = Number.isFinite(pos.entryIndex) && pos.entryIndex > 1
+        ? `#${pos.entryIndex} · `
+        : '';
       const side = String(pos.side || 'YES').toUpperCase();
       const upnl = pos.unrealizedPnl;
       const upnlPct = pos.unrealizedPnlPct;
       return `<tr>
         <td class="col-market">${market}</td>
-        <td>${window}</td>
+        <td>${entryTag}${window}</td>
         <td><span class="side-pill side-${side.toLowerCase()}">${side}</span></td>
         <td>${D.fmtSize(pos.shares)}</td>
         <td>${D.fmtPrice(pos.entryPrice, 2)}</td>
@@ -115,6 +117,7 @@
     line.innerHTML = `<span class="trade-type">${type}</span> ${text}${reasonTag} <span class="trade-ts">@ ${D.fmtTs(entry.timestamp)}</span>`;
     if (prepend) tradeLog.prepend(line);
     else tradeLog.appendChild(line);
+    while (tradeLog.children.length > MAX_TRADE_LOG) tradeLog.removeChild(tradeLog.lastChild);
   }
 
   function renderTradeHistory(tradeHistory = [], { replace = false } = {}) {

@@ -7,6 +7,7 @@ const { isRedisRequested } = require('../lib/redis');
 const { getMarket, setMarket, getCachedActiveMarkets, cacheMarkets } = require('../lib/redisMarketCache');
 const { getOrderbook: getOrderbookCached, setOrderbook: setOrderbookCached } = require('../lib/redisOrderbookCache');
 const { pushPrice } = require('../lib/redisPriceBuffer');
+const { filterLiveMarkets, partitionOpenMarkets } = require('../lib/marketSelection');
 
 const GAMMA = 'https://gamma-api.polymarket.com';
 const CLOB = 'https://clob.polymarket.com';
@@ -132,6 +133,8 @@ function parseSlugWindowStartMs(slug) {
 
 /** Window open (Chainlink reference time) for btc-updown markets. */
 function parseWindowStartMs(market) {
+  const fromSlug = parseSlugWindowStartMs(market?.slug);
+  if (fromSlug) return fromSlug;
   if (market?.windowStartTime && Number.isFinite(market.windowStartTime)) {
     return market.windowStartTime;
   }
@@ -139,8 +142,6 @@ function parseWindowStartMs(market) {
     const t = new Date(market.eventStartTime).getTime();
     if (Number.isFinite(t)) return t;
   }
-  const fromSlug = parseSlugWindowStartMs(market?.slug);
-  if (fromSlug) return fromSlug;
   if (Number.isFinite(market?.endTime) && market?.windowMinutes) {
     return market.endTime - market.windowMinutes * 60_000;
   }
@@ -210,21 +211,26 @@ function horizonMsForWindow(windowMinutes) {
 function selectNearestRelevantMarkets(markets, allowedWindows) {
   const now = Date.now();
   const windows = Array.isArray(allowedWindows) && allowedWindows.length ? allowedWindows : getAllowedWindows();
-
-  const live = markets
-    .filter((m) => Number.isFinite(m.endTime) && m.endTime > now)
-    .filter((m) => windows.includes(m.windowMinutes));
+  const { active } = partitionOpenMarkets(markets, windows, now);
+  const live = filterLiveMarkets(markets, windows, now);
 
   if (windows.length > 1) {
     const perWindow = Math.max(2, Math.ceil(8 / windows.length));
     const picked = [];
     for (const w of windows) {
       const horizonMs = horizonMsForWindow(w);
+      const activeForWindow = active.filter((m) => m.windowMinutes === w);
       const bucket = live
-        .filter((m) => m.windowMinutes === w && (m.endTime - now) <= horizonMs)
-        .sort((a, b) => a.endTime - b.endTime)
-        .slice(0, perWindow);
-      picked.push(...bucket);
+        .filter((m) => m.windowMinutes === w && (m.endTime - now) <= horizonMs);
+      const slice = bucket.length
+        ? bucket.slice(0, perWindow)
+        : live.filter((m) => m.windowMinutes === w).slice(0, perWindow);
+      const merged = [...activeForWindow, ...slice];
+      const byId = new Map();
+      for (const m of merged) {
+        if (m?.conditionId) byId.set(m.conditionId, m);
+      }
+      picked.push(...byId.values());
     }
     if (picked.length) {
       return picked.sort((a, b) => a.endTime - b.endTime).slice(0, 8);
@@ -233,11 +239,15 @@ function selectNearestRelevantMarkets(markets, allowedWindows) {
 
   const maxWindowMinutes = Math.max(...windows);
   const horizonMs = horizonMsForWindow(maxWindowMinutes);
-  const sorted = live.sort((a, b) => a.endTime - b.endTime);
-  const relevant = sorted.filter((m) => (m.endTime - now) <= horizonMs);
-  const picked = relevant.length ? relevant : sorted.slice(0, 8);
+  const activeForWindows = active.filter((m) => windows.includes(m.windowMinutes));
+  const relevant = live.filter((m) => (m.endTime - now) <= horizonMs);
+  const picked = relevant.length ? relevant : live;
+  const byId = new Map();
+  for (const m of [...activeForWindows, ...picked]) {
+    if (m?.conditionId) byId.set(m.conditionId, m);
+  }
 
-  return picked.slice(0, 8);
+  return [...byId.values()].sort((a, b) => a.endTime - b.endTime).slice(0, 8);
 }
 
 async function fetchMarketsFromSearch(allowedWindows) {
@@ -306,16 +316,16 @@ async function fetchMarketsFromCryptoTag(allowedWindows) {
     .filter(Boolean);
 }
 
-async function fetchAllActiveBTCMarketsRaw(allowedWindowsOverride = null) {
+async function fetchAllActiveBTCMarketsRaw(allowedWindowsOverride = null, forceRefresh = false) {
   const allowedWindows = Array.isArray(allowedWindowsOverride) && allowedWindowsOverride.length
     ? allowedWindowsOverride
     : getAllowedWindows();
   const cacheKey = allowedWindows.slice().sort((a, b) => a - b).join(',');
-  if (activeMarketsCache && activeMarketsCache.key === cacheKey && isCacheFresh(activeMarketsCache)) {
+  if (!forceRefresh && activeMarketsCache && activeMarketsCache.key === cacheKey && isCacheFresh(activeMarketsCache)) {
     return activeMarketsCache.markets;
   }
   let combined = [];
-  if (isRedisRequested()) {
+  if (!forceRefresh && isRedisRequested()) {
     try {
       const cached = await getCachedActiveMarkets();
       if (cached.length) {
@@ -350,22 +360,43 @@ async function getActiveBTCShortMarkets(allowedWindowsOverride = null) {
 function listLiveMarketsForWindow(markets, windowKey) {
   const windowMinutes = windowKeyToMinutes(windowKey);
   if (!windowMinutes) return [];
-  const now = Date.now();
-  return (markets || [])
-    .filter((m) => m.windowMinutes === windowMinutes && Number.isFinite(m.endTime) && m.endTime > now)
-    .sort((a, b) => a.endTime - b.endTime);
+  return filterLiveMarkets(markets, [windowMinutes]);
 }
 
-async function listLiveBTCMarketsForWindow(windowKey) {
+function invalidateLiveMarketCaches() {
+  activeMarketsCache = null;
+  windowListCache.clear();
+}
+
+async function listLiveBTCMarketsForWindow(windowKey, options = {}) {
   const windowMinutes = windowKeyToMinutes(windowKey);
   if (!windowMinutes) return [];
+  const forceRefresh = options.forceRefresh === true;
   const cached = windowListCache.get(windowKey);
-  if (isCacheFresh(cached)) return cached.data;
+  if (!forceRefresh && isCacheFresh(cached)) return cached.data;
 
-  const combined = await fetchAllActiveBTCMarketsRaw([5, 15, WINDOW_1D_MINUTES]);
+  const combined = await fetchAllActiveBTCMarketsRaw([5, 15, WINDOW_1D_MINUTES], forceRefresh);
   const list = listLiveMarketsForWindow(combined, windowKey);
   windowListCache.set(windowKey, { ts: Date.now(), data: list });
   return list;
+}
+
+async function fetchLiveMarketsForMode(modeOrWindows, options = {}) {
+  const { modeToWindows, windowMinutesToMode } = require('../lib/marketSelection');
+  const forceRefresh = options.forceRefresh === true;
+  const windows = Array.isArray(modeOrWindows) ? modeOrWindows : modeToWindows(modeOrWindows);
+  const byId = new Map();
+  for (const windowMinutes of windows) {
+    const windowKey = windowMinutesToMode(windowMinutes);
+    if (!windowKey) continue;
+    const list = await listLiveBTCMarketsForWindow(windowKey, { forceRefresh });
+    for (const m of list) {
+      if (m?.conditionId) byId.set(m.conditionId, m);
+    }
+  }
+  if (byId.size) return [...byId.values()];
+  if (forceRefresh) invalidateLiveMarketCaches();
+  return getActiveBTCShortMarkets(windows);
 }
 
 async function fetchGammaMarketBySlug(slug) {
@@ -918,7 +949,9 @@ module.exports = {
   getActiveBTCShortMarkets,
   fetchAllActiveBTCMarketsRaw,
   listLiveBTCMarketsForWindow,
+  fetchLiveMarketsForMode,
   listLiveMarketsForWindow,
+  invalidateLiveMarketCaches,
   getMarketDetails,
   getActiveBTC15MinMarkets,
   getRecentResolvedMarkets,

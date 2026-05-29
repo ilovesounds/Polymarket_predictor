@@ -17,7 +17,16 @@
     stopLossValueLabel: document.getElementById('lab-stop-loss-value-label'),
     entryMinSeconds: document.getElementById('lab-entry-min-seconds'),
     entryMaxSeconds: document.getElementById('lab-entry-max-seconds'),
+    takeProfitPrice: document.getElementById('lab-take-profit-price'),
+    tradesPerMarket: document.getElementById('lab-trades-per-market'),
     maxTradesPerMarket: document.getElementById('lab-max-trades-market'),
+    maxTradesPerMarketGroup: document.getElementById('lab-max-trades-group'),
+    maxTradesPerMarketLabel: document.getElementById('lab-max-trades-label'),
+    minSecondsBetweenEntries: document.getElementById('lab-min-entry-cooldown'),
+    minSecondsBetweenEntriesGroup: document.getElementById('lab-entry-cooldown-group'),
+    multiEntryModeGroup: document.getElementById('lab-multi-entry-mode-group'),
+    multiEntryModeRadios: () => Array.from(document.querySelectorAll('input[name="lab-multi-entry-mode"]')),
+    tradingPreview: document.getElementById('lab-trading-preview'),
   };
 
   function readLabBotProfile() {
@@ -27,6 +36,12 @@
       payload.stopLossPrice = null;
     }
     return payload;
+  }
+
+  function refreshLabTradingPreview() {
+    if (!labProfileEls.tradingPreview) return;
+    const wm = D.getState().polyMode === '15m' ? 15 : D.getState().polyMode === '1d' ? 1440 : 5;
+    labProfileEls.tradingPreview.textContent = P.formatTradingPreview(readLabBotProfile(), wm);
   }
 
   const els = {
@@ -359,7 +374,10 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
     try {
       const resp = await fetch('/api/bot/profile').then((r) => r.json());
       if (resp.strategies) renderLabStrategies(resp.strategies, resp.profile?.strategyId);
-      if (resp.profile) P.applyProfileToForm(resp.profile, labProfileEls);
+      if (resp.profile) {
+        P.applyProfileToForm(resp.profile, labProfileEls);
+        refreshLabTradingPreview();
+      }
     } catch (_) {}
   }
 
@@ -518,9 +536,10 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
       try { applyPresetToForm(JSON.parse(localDraft)); } catch (_) {}
     }
 
-    P.bindStopLossControls(labProfileEls);
+    P.bindTradingControls(labProfileEls, refreshLabTradingPreview);
     await loadPresetsFromServer();
     await loadBotProfileFromServer();
+    refreshLabTradingPreview();
 
     try {
       const snap = await fetch('/api/lab/params').then((r) => r.json());

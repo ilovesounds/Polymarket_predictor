@@ -13,6 +13,8 @@
 
   const BTC_STREAMS = [
     { key: 'binance_ws', label: 'Binance WebSocket', sub: 'Trade time → local receive' },
+    { key: 'coinbase_ws', label: 'Coinbase WebSocket', sub: 'Ticker time → local receive' },
+    { key: 'kraken_ws', label: 'Kraken WebSocket', sub: 'Ticker → local receive' },
     { key: 'chainlink_oracle_age', label: 'Chainlink oracle age', sub: 'On-chain update → poll' },
     { key: 'chainlink_poll_rtt', label: 'Chainlink RPC', sub: 'Round-trip per poll' },
   ];

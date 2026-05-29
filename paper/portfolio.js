@@ -80,10 +80,14 @@ function formatMarketWindowLabel(market) {
   return market.conditionId ? `${String(market.conditionId).slice(0, 8)}…` : 'Unknown market';
 }
 
-function formatEntryLog({ direction = 'YES', shares, entryPrice, betSize, market }) {
+function formatEntryLog({ direction = 'YES', shares, entryPrice, betSize, market, entryIndex }) {
   const side = String(direction || 'YES').toUpperCase();
   const window = formatMarketWindowLabel(market);
   const title = market?.question ? `${market.question} ${window}` : window;
+  if (Number.isFinite(entryIndex) && entryIndex > 1) {
+    const ord = entryIndex === 2 ? '2nd' : entryIndex === 3 ? '3rd' : `${entryIndex}th`;
+    return `Bought ${ord} ${side} entry @ ${Number(entryPrice).toFixed(2)} (${fmtUsd(betSize)}) — ${fmtShares(shares)} shares · ${title}`;
+  }
   return `Bought ${fmtShares(shares)} ${side} shares @ ${Number(entryPrice).toFixed(2)} (${fmtUsd(betSize)}) — ${title}`;
 }
 
@@ -311,6 +315,7 @@ function buildOpenPositionRow(position, currentPrice) {
     entryTime: position.entryTime,
     endTime: position.market?.endTime ?? position.endTime ?? null,
     strategyId: position.strategyId || null,
+    entryIndex: position.entryIndex ?? null,
   };
 }
 

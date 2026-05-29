@@ -123,6 +123,7 @@ function formatTradeLogLine(event) {
       entryPrice: event.entryPrice,
       betSize: event.betSize,
       market,
+      entryIndex: event.entryIndex,
     });
   }
   if (event.eventType === 'exit') {
@@ -151,7 +152,8 @@ function formatConciseTradeEvent(event) {
   return `[Trade ${event.eventType || 'event'}] ${event.tradeId || 'n/a'} ${ec} ${side} ${sharesText}sh ${outcome} pnl=${pnlText} depth=${depthText} hold=${holdText}`;
 }
 
-const USE_NATS = process.env.USE_NATS !== 'false' && process.env.NATS_URL !== 'disabled';
+const { isNatsEnabled } = require('../lib/serviceFlags');
+const USE_NATS = isNatsEnabled();
 
 function publishToDashboard(event) {
   if (process.env.ENABLE_DASHBOARD_FEED === 'false') return;

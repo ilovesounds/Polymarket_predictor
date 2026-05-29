@@ -18,32 +18,12 @@
         <p class="brand-sub">Paper portfolio</p>
       </div>
     </div>
-    <nav class="app-nav" aria-label="Dashboard">
-      <a href="/live">Live</a>
-      <a href="/orderbook">Orderbook</a>
-      <a href="/bot">Bot</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/markets">Markets</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/lab">Strategy Lab</a>
-      <a href="/latency">Latency</a>
-      <a href="/docs">Docs</a>
-    </nav>
-    <div class="top-controls">
-      <label class="control-group" for="poly-mode-select">
-        <span class="control-label">Market window</span>
-        <select id="poly-mode-select" class="control-input">
-          <option value="5m">5m</option>
-          <option value="15m">15m</option>
-          <option value="both">both</option>
-        </select>
-      </label>
-    </div>
-    <div class="status-bar">
-      <span id="ws-status" class="pill off">WS disconnected</span>
-      <span id="binance-status" class="pill off">Binance —</span>
-      <span id="poly-status" class="pill off">Polymarket —</span>
-      <span id="bot-status" class="pill">Bot idle</span>
+    <nav class="app-nav" aria-label="Dashboard"></nav>
+    <div class="status-bar status-bar-full">
+      <span id="ws-status" class="pill pill-sm off">WS disconnected</span>
+      <span id="binance-status" class="pill pill-sm off">Binance —</span>
+      <span id="poly-status" class="pill pill-sm off">Polymarket —</span>
+      <span id="bot-status" class="pill pill-sm">Bot idle</span>
     </div>
   </header>
 
@@ -88,12 +68,8 @@
           <span class="metric-label">Open positions</span>
           <strong id="portfolio-open-count" class="metric-value">0</strong>
         </div>
-        <div class="metric-card">
-          <span class="metric-label">Mode</span>
-          <strong id="portfolio-mode" class="metric-value">paper</strong>
-        </div>
       </div>
-      <p class="portfolio-hint">Start the bot from <a href="/bot">Bot</a> to paper trade. Open PnL marks to market on Polymarket price ticks and bot portfolio snapshots.</p>
+      <p class="portfolio-hint">Paper wallet per profile. Start the bot from <a href="/bot">Bot</a>.</p>
     </section>
 
     <section class="card-panel page-panel portfolio-cash-panel">
@@ -101,11 +77,7 @@
         <h2>Cash adjustments</h2>
         <span class="panel-meta">Paper mode · persisted in <code>data/cash-adjustments.json</code></span>
       </div>
-      <p class="portfolio-hint cash-adjust-hint">
-        <code>STARTING_CASH</code> in <code>.env</code> is the initial baseline only.
-        Add or remove liquid cash here; open positions are unchanged.
-        ROI uses <strong>Starting cash</strong> unless you check “Also update ROI baseline” on a deposit.
-      </p>
+      <p class="portfolio-hint cash-adjust-hint">Add or remove liquid cash. Open positions are unchanged.</p>
       <div class="cash-adjust-form">
         <label class="control-group" for="portfolio-cash-amount">
           <span class="control-label">Amount (USD)</span>
@@ -150,11 +122,10 @@
     </section>
 
     <section class="card-panel page-panel portfolio-log-section">
-      <div class="panel-head">
-        <h2>Trade history</h2>
-        <span class="panel-meta" id="portfolio-trade-count">0 trades</span>
-      </div>
-      <div class="log portfolio-log-panel" id="portfolio-trade-log"></div>
+      <details class="stream-log-details portfolio-trade-details">
+        <summary>Trade history <span class="panel-meta" id="portfolio-trade-count">0 trades</span></summary>
+        <div class="log portfolio-log-panel" id="portfolio-trade-log"></div>
+      </details>
     </section>
   </main>
 

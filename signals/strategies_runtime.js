@@ -46,12 +46,19 @@ const STRATEGIES = {
   },
 };
 
-function listStrategies() {
+function strategyStopForProfile(strategyId, profile = {}, entryPrice = 0.5) {
+  const strategy = getStrategy(strategyId);
+  const { resolveStopThreshold } = require('../lib/botProfile');
+  return resolveStopThreshold(entryPrice, profile, strategy.stop);
+}
+
+function listStrategies(profile = null) {
   return Object.values(STRATEGIES).map((s) => ({
     id: s.id,
     label: s.label,
     description: s.description,
-    stop: s.stop,
+    stop: profile ? strategyStopForProfile(s.id, profile) : s.stop,
+    strategyStop: s.stop,
   }));
 }
 
@@ -64,7 +71,9 @@ function normalizeStrategyId(strategyId) {
 }
 
 module.exports = {
+  STRATEGIES,
   listStrategies,
   getStrategy,
   normalizeStrategyId,
+  strategyStopForProfile,
 };

@@ -2,22 +2,22 @@
   "profiles": [
     {
       "id": "default",
-      "name": "Default compound",
-      "strategyId": "deterministic_yes_50",
+      "name": "default",
+      "strategyId": "conservative_yes_55",
       "marketWindow": "5m",
       "runLimit": {
         "mode": "unlimited",
         "tradeCount": null
       },
-      "stopLossPct": null,
+      "stopLossPct": 10,
       "stopLossPrice": null,
       "stopThreshold": 0.45,
       "entryMinSeconds": null,
       "entryMaxSeconds": null,
       "entryMinPrice": null,
       "entryMaxPrice": null,
-      "maxTradesPerMarket": 1,
-      "updatedAt": null,
+      "maxTradesPerMarket": 5,
+      "updatedAt": 1780070729019,
       "maxSpreadCents": 5,
       "minDepthUsd": 1000,
       "minVolume24h": 0,
@@ -26,15 +26,45 @@
       "maxPositionPctOfLiquidity": 5,
       "ticksFromMid": 3,
       "gateMode": "warn",
-      "sizingMode": "compound",
+      "sizingMode": "percent",
       "fixedBetUsd": 20,
       "betPercent": 25,
       "kellyFractionCap": 0.08,
-      "defaultWinRate": 0.55
+      "defaultWinRate": 0.55,
+      "apply": true,
+      "select": true,
+      "createdAt": 1780062205381,
+      "running": false,
+      "pid": null,
+      "cash": 602.92,
+      "mode": "paper",
+      "startedAt": null,
+      "stoppedAt": null,
+      "lastExitCode": null,
+      "profileId": "default",
+      "runMode": "indefinite",
+      "runMarketLimit": 10,
+      "runTimeLimitMinutes": 60,
+      "runUntil": null,
+      "takeProfitPrice": null,
+      "tradesPerMarket": "multiple",
+      "minSecondsBetweenEntries": 0,
+      "runDuration": {
+        "runMode": "indefinite",
+        "runMarketLimit": 10,
+        "runTimeLimitMinutes": 60,
+        "runUntil": null
+      },
+      "runProgress": null,
+      "tradingPreview": {
+        "entryWindow": "Entry allowed when: 30s < time left < 270s",
+        "stopLoss": "Stop loss: YES ≤ 0.45 (10% from entry)"
+      },
+      "multiEntryMode": "sequential"
     },
     {
       "id": "conservative-25",
-      "name": "Conservative 25%",
+      "name": "conservative-25",
       "strategyId": "conservative_yes_55",
       "marketWindow": "5m",
       "runLimit": {
@@ -49,7 +79,7 @@
       "entryMinPrice": null,
       "entryMaxPrice": null,
       "maxTradesPerMarket": 3,
-      "updatedAt": null,
+      "updatedAt": 1780062064191,
       "maxSpreadCents": 5,
       "minDepthUsd": 1000,
       "minVolume24h": 0,
@@ -62,7 +92,10 @@
       "fixedBetUsd": 20,
       "betPercent": 25,
       "kellyFractionCap": 0.08,
-      "defaultWinRate": 0.55
+      "defaultWinRate": 0.55,
+      "select": true,
+      "createdAt": 1780062049068,
+      "apply": true
     }
   ]
 }

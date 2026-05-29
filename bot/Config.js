@@ -7,6 +7,7 @@ const { getAllowedWindows } = require('../api/polymarket_runtime');
 const { normalizeStrategyId } = require('../signals/strategies_runtime');
 const { parseStrategyPriority } = require('./StrategyRouter');
 const { resolvePortfolioCashFromAdjustments } = require('../lib/cashAdjustments');
+const { isNatsEnabled, isChainlinkEnabled, resolvePolygonRpc } = require('../lib/serviceFlags');
 
 /**
  * Exit: fixed take-profit price vs hold for resolution payout.
@@ -83,7 +84,8 @@ function loadConfig(env = process.env) {
   return {
     paperTrade,
     privateKey: env.PRIVATE_KEY || null,
-    polygonRpc: env.POLYGON_RPC || 'https://polygon-rpc.com',
+    polygonRpc: resolvePolygonRpc(env),
+    chainlinkEnabled: isChainlinkEnabled(env),
     pollIntervalMs: Number(env.BOT_POLL_INTERVAL_MS || 30_000),
     positionValuationMs: Number(env.POSITION_VALUATION_MS || 10_000),
     stopThreshold: Number(env.BOT_STOP_THRESHOLD || 0.45),
@@ -93,7 +95,10 @@ function loadConfig(env = process.env) {
     entryMaxSeconds: parseOptInt(env.BOT_ENTRY_MAX_SECONDS),
     entryMinPrice: parseOptFloat(env.BOT_ENTRY_MIN_PRICE),
     entryMaxPrice: parseOptFloat(env.BOT_ENTRY_MAX_PRICE),
+    tradesPerMarket: env.BOT_TRADES_PER_MARKET === 'multiple' ? 'multiple' : 'single',
     maxTradesPerMarket: Math.max(1, parseOptInt(env.BOT_MAX_TRADES_PER_MARKET) ?? 1),
+    minSecondsBetweenEntries: Math.max(0, parseOptInt(env.BOT_MIN_SECONDS_BETWEEN_ENTRIES) ?? 0),
+    multiEntryMode: env.BOT_MULTI_ENTRY_MODE === 'simultaneous' ? 'simultaneous' : 'sequential',
     envStartingCash,
     startingCash: cashFromFile.startingCash,
     initialCash: cashFromFile.cash,
@@ -102,11 +107,15 @@ function loadConfig(env = process.env) {
     allowedWindows: allowedWindows.length ? allowedWindows : getAllowedWindows(),
     strategyIds: strategyIds.length ? strategyIds : [legacyStrategy],
     legacyStrategyId: legacyStrategy,
-    useNats: env.USE_NATS !== 'false' && env.NATS_URL !== 'disabled',
-    botUseNatsFeeds: env.USE_NATS !== 'false' && env.NATS_URL !== 'disabled' && env.BOT_USE_NATS_FEEDS === 'true',
+    useNats: isNatsEnabled(env),
+    botUseNatsFeeds: isNatsEnabled(env) && env.BOT_USE_NATS_FEEDS === 'true',
     sessionMode: env.BOT_SESSION_MODE || env.SESSION_MODE || null,
     sessionPnlStop: parseFloat(env.BOT_SESSION_PNL_STOP || env.SESSION_PNL_STOP || ''),
     sessionPnlTarget: parseFloat(env.BOT_SESSION_PNL_TARGET || env.SESSION_PNL_TARGET || ''),
+    runMode: env.BOT_RUN_MODE || null,
+    runMarketLimit: parseOptInt(env.BOT_RUN_MARKET_LIMIT),
+    runTimeLimitMinutes: parseOptInt(env.BOT_RUN_TIME_LIMIT_MINUTES),
+    runUntil: env.BOT_RUN_UNTIL || null,
     runLimitMode: env.BOT_RUN_LIMIT_MODE,
     runLimitTrades: env.BOT_RUN_LIMIT_TRADES,
     enrichPriceHistory: env.BOT_ENRICH_PRICE_HISTORY === 'true',

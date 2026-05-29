@@ -4,6 +4,7 @@ const AGGREGATOR_ABI = [
 ];
 
 let chainlinkState = { price: null, updatedAt: null, fetchedAt: null };
+let chainlinkPollErrorLogged = false;
 let binanceState = { price: null, updatedAt: null, sourceUpdatedAt: null, latencyMs: null };
 let binanceWs = null;
 
@@ -25,7 +26,10 @@ async function pollChainlink(provider) {
     recordLatency('chainlink_poll_rtt', { sourceTs: pollStart, receivedTs: fetchedAt });
     recordLatency('chainlink_oracle_age', { sourceTs: oracleUpdatedAt, receivedTs: fetchedAt });
   } catch (e) {
-    console.error('[Chainlink] poll error:', e.message);
+    if (!chainlinkPollErrorLogged) {
+      chainlinkPollErrorLogged = true;
+      console.warn('[Chainlink] poll skipped:', e.message);
+    }
   }
 }
 

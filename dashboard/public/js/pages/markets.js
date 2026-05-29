@@ -4,7 +4,6 @@
   const STORAGE_PRIMARY = 'dashboardPrimaryMarketId';
 
   const marketsMeta = document.getElementById('markets-meta');
-  const marketsSelect = document.getElementById('markets-select');
   const marketsList = document.getElementById('markets-list');
   const marketsDetail = document.getElementById('markets-detail');
   const windowTabs = document.querySelectorAll('.window-tab');
@@ -142,19 +141,6 @@
       marketsMeta.textContent = `${marketRows.length} live · ${browseWindow} · ${D.fmtTs(now)}`;
     }
 
-    if (marketsSelect) {
-      marketsSelect.innerHTML = marketRows.length
-        ? marketRows.map((m) => {
-          const rem = Number.isFinite(m.endTime) ? m.endTime - now : 0;
-          const cd = rem > 0 ? D.fmtCountdown(rem) : 'done';
-          const label = `${cd} · ${(m.question || m.conditionId || '').slice(0, 72)}`;
-          const sel = m.conditionId === selectedId ? ' selected' : '';
-          return `<option value="${m.conditionId}"${sel}>${label}</option>`;
-        }).join('')
-        : '<option value="">No live markets</option>';
-      if (selectedId) marketsSelect.value = selectedId;
-    }
-
     if (!marketsList) return;
     if (!marketRows.length) {
       marketsList.innerHTML = '<div class="market-row empty">No active BTC markets for this window.</div>';
@@ -246,12 +232,6 @@
       loadWindowList(w);
     });
   });
-
-  if (marketsSelect) {
-    marketsSelect.addEventListener('change', () => {
-      if (marketsSelect.value) selectMarket(marketsSelect.value);
-    });
-  }
 
   D.subscribe((msg) => {
     if (msg.source === 'polymarket' && msg.type === 'market_details') {

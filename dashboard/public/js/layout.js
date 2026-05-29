@@ -5,6 +5,30 @@
   const D = window.Dashboard;
   if (!D) return;
 
+  const NAV_ITEMS = [
+    { href: '/live', label: 'Live' },
+    { href: '/orderbook', label: 'Orderbook' },
+    { href: '/bot', label: 'Bot' },
+    { href: '/portfolio', label: 'Portfolio' },
+    { href: '/markets', label: 'Markets' },
+    { href: '/lab', label: 'Strategy Lab' },
+    { href: '/latency', label: 'Latency' },
+    { href: '/docs', label: 'Docs' },
+  ];
+
+  const PAGES_WITH_POLY_MODE = new Set(['live', 'orderbook', 'lab']);
+
+  function isDebug() {
+    try {
+      return new URLSearchParams(window.location.search).has('debug')
+        || localStorage.getItem('dashboardDebug') === '1';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  window.DashboardLayout = { isDebug, NAV_ITEMS };
+
   const polyModeSelect = document.getElementById('poly-mode-select');
   const wsStatus = document.getElementById('ws-status');
   const binanceStatus = document.getElementById('binance-status');
@@ -12,19 +36,42 @@
   const botStatus = document.getElementById('bot-status');
   const pageId = document.body.dataset.page || 'live';
 
+  function injectNav() {
+    const nav = document.querySelector('.app-nav');
+    if (!nav || nav.dataset.managed === '1') return;
+    nav.dataset.managed = '1';
+    nav.innerHTML = NAV_ITEMS.map((item) => {
+      const page = item.href.replace(/^\//, '') || 'live';
+      const active = page === pageId || (pageId === 'live' && page === 'live');
+      return `<a href="${item.href}"${active ? ' class="active"' : ''}>${item.label}</a>`;
+    }).join('');
+  }
+
+  function hideIrrelevantChrome() {
+    const topControls = document.querySelector('.top-controls');
+    if (topControls && !PAGES_WITH_POLY_MODE.has(pageId)) {
+      topControls.hidden = true;
+    }
+  }
+
   function setActiveNav() {
     document.querySelectorAll('.app-nav a').forEach((a) => {
       const href = a.getAttribute('href');
-      const active = href === `/${pageId}` || (pageId === 'live' && (href === '/' || href === '/live'));
+      const page = href === '/' ? 'live' : href.replace(/^\//, '');
+      const active = page === pageId || (pageId === 'live' && (href === '/' || href === '/live'));
       a.classList.toggle('active', active);
     });
+  }
+
+  function pillClass(state) {
+    return `pill pill-sm ${state}`;
   }
 
   function renderStatusPills() {
     const s = D.getState();
     if (binanceStatus) {
       binanceStatus.textContent = s.binanceConnected ? 'Binance live' : 'Binance waiting';
-      binanceStatus.className = `pill ${s.binanceConnected ? 'on' : 'off'}`;
+      binanceStatus.className = pillClass(s.binanceConnected ? 'on' : 'off');
     }
     if (polyStatus) {
       const polyLive = Boolean(s.polymarketConnected);
@@ -32,12 +79,16 @@
       polyStatus.textContent = polyLive
         ? `Polymarket live${s.lastPolyVia ? ` · ${s.lastPolyVia}` : ''}`
         : `Polymarket waiting${natsNote}`;
-      polyStatus.className = `pill ${polyLive ? 'on' : (s.natsConnected ? 'warn' : 'off')}`;
+      polyStatus.className = pillClass(polyLive ? 'on' : (s.natsConnected ? 'warn' : 'off'));
     }
     if (botStatus) {
       const running = Boolean(s.bot.running);
-      botStatus.textContent = running ? `Bot live (${s.bot.mode || 'paper'})` : 'Bot idle';
-      botStatus.className = `pill ${running ? 'on' : 'off'}`;
+      let label = running ? `Bot live (${s.bot.mode || 'paper'})` : 'Bot idle';
+      if (running && s.bot.runProgress?.label) {
+        label += ` · ${s.bot.runProgress.label}`;
+      }
+      botStatus.textContent = label;
+      botStatus.className = pillClass(running ? 'on' : 'off');
     }
     if (polyModeSelect) {
       polyModeSelect.value = s.selectedPolyMode;
@@ -48,13 +99,13 @@
     if (!wsStatus) return;
     if (type === 'ws_open') {
       wsStatus.textContent = 'WS connected';
-      wsStatus.className = 'pill on';
+      wsStatus.className = pillClass('on');
     } else if (type === 'ws_close') {
       wsStatus.textContent = 'WS disconnected';
-      wsStatus.className = 'pill off';
+      wsStatus.className = pillClass('off');
     } else if (type === 'ws_error') {
       wsStatus.textContent = 'WS error';
-      wsStatus.className = 'pill warn';
+      wsStatus.className = pillClass('warn');
     }
   }
 
@@ -83,13 +134,15 @@
         renderStatusPills();
       }
     }
-    if (msg.source === 'bot' && msg.type === 'state') renderStatusPills();
+    if (msg.source === 'bot' && (msg.type === 'state' || msg.type === 'run_progress')) renderStatusPills();
   });
 
   if (polyModeSelect) {
     polyModeSelect.addEventListener('change', onModeChange);
   }
 
+  injectNav();
+  hideIrrelevantChrome();
   setActiveNav();
   renderStatusPills();
 })();

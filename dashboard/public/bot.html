@@ -18,126 +18,125 @@
         <p class="brand-sub">Bot control</p>
       </div>
     </div>
-    <nav class="app-nav" aria-label="Dashboard">
-      <a href="/live">Live</a>
-      <a href="/orderbook">Orderbook</a>
-      <a href="/bot">Bot</a>
-      <a href="/portfolio">Portfolio</a>
-      <a href="/markets">Markets</a>
-      <a href="/backtest">Backtest</a>
-      <a href="/lab">Strategy Lab</a>
-      <a href="/latency">Latency</a>
-      <a href="/docs">Docs</a>
-    </nav>
-    <div class="top-controls">
-      <label class="control-group" for="poly-mode-select">
-        <span class="control-label">Market window</span>
-        <select id="poly-mode-select" class="control-input">
-          <option value="5m">5m</option>
-          <option value="15m">15m</option>
-          <option value="1d">1d</option>
-          <option value="both">both</option>
-          <option value="all">all</option>
-        </select>
-      </label>
-    </div>
-    <div class="status-bar">
-      <span id="ws-status" class="pill off">WS disconnected</span>
-      <span id="binance-status" class="pill off">Binance —</span>
-      <span id="poly-status" class="pill off">Polymarket —</span>
-      <span id="bot-status" class="pill">Bot idle</span>
+    <nav class="app-nav" aria-label="Dashboard"></nav>
+    <div class="status-bar status-bar-full">
+      <span id="ws-status" class="pill pill-sm off">WS disconnected</span>
+      <span id="binance-status" class="pill pill-sm off">Binance —</span>
+      <span id="poly-status" class="pill pill-sm off">Polymarket —</span>
+      <span id="bot-status" class="pill pill-sm">Bot idle</span>
     </div>
   </header>
 
   <main class="page-main bot-page">
     <section class="card-panel page-panel bot-controls-panel">
-      <h2>Controls</h2>
+      <h2>Bot</h2>
       <div class="bot-controls-grid">
         <label class="control-group" for="bot-profile-select">
-          <span class="control-label">Bot profile</span>
+          <span class="control-label">Profile</span>
           <select id="bot-profile-select" class="control-input"></select>
         </label>
-        <div class="control-group">
-          <span class="control-label">Profile actions</span>
-          <div class="btn-row">
-            <button id="bot-profile-new-btn" type="button" class="btn btn-secondary">New</button>
-            <button id="bot-profile-dup-btn" type="button" class="btn btn-secondary">Duplicate</button>
-            <button id="bot-profile-del-btn" type="button" class="btn btn-secondary">Delete</button>
-          </div>
-        </div>
         <label class="control-group" for="bot-strategy-select">
           <span class="control-label">Strategy</span>
           <select id="bot-strategy-select" class="control-input"></select>
         </label>
-        <label class="control-group" for="bot-market-window-select">
-          <span class="control-label">Markets to trade</span>
-          <select id="bot-market-window-select" class="control-input">
-            <option value="5m">5m only</option>
-            <option value="15m">15m only</option>
-            <option value="1d">1d only</option>
-            <option value="both">5m + 15m</option>
-            <option value="all">All (5m, 15m, 1d)</option>
-          </select>
-        </label>
-        <label class="control-group" for="bot-run-limit-select">
-          <span class="control-label">Run until</span>
-          <select id="bot-run-limit-select" class="control-input">
-            <option value="unlimited">No limit (runs until stopped)</option>
-            <option value="trades_4">Next 4 trades</option>
-            <option value="trades_11">Next 11 trades</option>
-            <option value="trades_custom">Custom trade count…</option>
-            <option value="end_of_day">End of day (local)</option>
-          </select>
-        </label>
-        <label class="control-group bot-run-custom hidden" for="bot-run-custom-trades">
-          <span class="control-label">Custom trades</span>
-          <input id="bot-run-custom-trades" class="control-input" type="number" min="1" max="500" value="11" />
-        </label>
       </div>
       <div class="bot-profile-section">
-        <h3 class="bot-subsection-title">Risk &amp; entry</h3>
-        <p class="bot-profile-hint">Synced with <a href="/lab">Strategy Lab</a> when you apply a preset. Paper mode only.</p>
-        <div class="bot-controls-grid">
-        <label class="control-group" for="bot-stop-loss-mode">
-          <span class="control-label">Stop loss type</span>
-          <select id="bot-stop-loss-mode" class="control-input">
-            <option value="pct">% drop from entry</option>
-            <option value="price">Fixed YES price</option>
-            <option value="off">Strategy default only</option>
-          </select>
-        </label>
-        <label class="control-group bot-stop-loss-value-group" for="bot-stop-loss-value">
-          <span class="control-label" id="bot-stop-loss-value-label">Stop loss %</span>
-          <div class="bot-slider-row">
-            <input type="range" id="bot-stop-loss-slider" class="bot-range" min="1" max="50" step="1" value="10" />
-            <input id="bot-stop-loss-value" class="control-input bot-stop-input" type="number" min="0" step="0.01" value="10" />
-          </div>
-        </label>
-        <label class="control-group" for="bot-entry-min-seconds">
-          <span class="control-label">Min seconds after open</span>
-          <input id="bot-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
-        </label>
-        <label class="control-group" for="bot-entry-max-seconds">
-          <span class="control-label">Max seconds before end</span>
-          <input id="bot-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
-        </label>
-        <label class="control-group" for="bot-entry-min-price">
-          <span class="control-label">Min YES price</span>
-          <input id="bot-entry-min-price" class="control-input" type="number" min="0" max="1" step="0.01" placeholder="any" />
-        </label>
-        <label class="control-group" for="bot-entry-max-price">
-          <span class="control-label">Max YES price</span>
-          <input id="bot-entry-max-price" class="control-input" type="number" min="0" max="1" step="0.01" placeholder="any" />
-        </label>
-        <label class="control-group" for="bot-max-trades-market">
-          <span class="control-label">Max trades per market</span>
-          <input id="bot-max-trades-market" class="control-input" type="number" min="1" max="100" value="1" />
-        </label>
+        <h3 class="bot-subsection-title">Run duration</h3>
+        <p class="bot-profile-hint">Stop automatically after a market-entry count or elapsed time. Counts <strong>entries</strong> (positions opened), not exits.</p>
+        <div class="lab-segmented bot-run-mode" role="radiogroup" aria-label="Run duration mode">
+          <label class="lab-segment">
+            <input type="radio" name="bot-run-mode" value="indefinite" checked />
+            <span>Run indefinitely</span>
+          </label>
+          <label class="lab-segment">
+            <input type="radio" name="bot-run-mode" value="markets" />
+            <span>Stop after N markets</span>
+          </label>
+          <label class="lab-segment">
+            <input type="radio" name="bot-run-mode" value="time" />
+            <span>Stop after N minutes</span>
+          </label>
         </div>
+        <div class="bot-controls-grid">
+          <label class="control-group hidden" id="bot-run-market-group" for="bot-run-market-limit">
+            <span class="control-label">Market entries (N)</span>
+            <input id="bot-run-market-limit" class="control-input" type="number" min="1" max="500" step="1" value="10" />
+          </label>
+          <label class="control-group hidden" id="bot-run-time-group" for="bot-run-time-limit">
+            <span class="control-label">Minutes (N)</span>
+            <input id="bot-run-time-limit" class="control-input" type="number" min="1" max="10080" step="1" value="60" />
+          </label>
+          <label class="control-group" for="bot-run-until">
+            <span class="control-label">Stop at (optional ISO time)</span>
+            <input id="bot-run-until" class="control-input" type="datetime-local" step="60" />
+          </label>
+        </div>
+        <p id="bot-run-status" class="bot-profile-hint" aria-live="polite"></p>
+      </div>
+      <div class="bot-profile-section">
+        <p class="bot-profile-hint">Also editable in <a href="/lab">Strategy Lab</a>. Saved with the active profile on Start.</p>
+        <div class="bot-controls-grid">
+          <label class="control-group" for="bot-stop-loss-mode">
+            <span class="control-label">Stop loss type</span>
+            <select id="bot-stop-loss-mode" class="control-input">
+              <option value="pct">% drop from entry</option>
+              <option value="price">Fixed YES price</option>
+              <option value="off">Strategy default only</option>
+            </select>
+          </label>
+          <label class="control-group" for="bot-stop-loss-value">
+            <span class="control-label" id="bot-stop-loss-value-label">Stop loss %</span>
+            <div class="bot-slider-row">
+              <input type="range" id="bot-stop-loss-slider" class="bot-range" min="1" max="50" step="1" value="10" />
+              <input id="bot-stop-loss-value" class="control-input bot-stop-input" type="number" min="0" step="0.01" value="10" />
+            </div>
+          </label>
+          <label class="control-group" for="bot-take-profit-price">
+            <span class="control-label">Take profit (YES, optional)</span>
+            <input id="bot-take-profit-price" class="control-input" type="number" min="0.51" max="0.99" step="0.01" placeholder="none" />
+          </label>
+          <label class="control-group" for="bot-entry-max-seconds">
+            <span class="control-label">Don't enter while more than __ s remain</span>
+            <input id="bot-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default (e.g. 270 on 5m)" />
+          </label>
+          <label class="control-group" for="bot-entry-min-seconds">
+            <span class="control-label">Don't enter until __ s after window opens</span>
+            <input id="bot-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default min time left" />
+          </label>
+          <label class="control-group" for="bot-trades-per-market">
+            <span class="control-label">Entries per market</span>
+            <select id="bot-trades-per-market" class="control-input">
+              <option value="single">One trade per market</option>
+              <option value="multiple">Allow multiple entries</option>
+            </select>
+          </label>
+          <div class="control-group hidden" id="bot-multi-entry-mode-group">
+            <span class="control-label">Multiple entry mode</span>
+            <div class="lab-segmented" role="radiogroup" aria-label="Multiple entry mode">
+              <label class="lab-segment">
+                <input type="radio" name="bot-multi-entry-mode" value="simultaneous" />
+                <span>Simultaneous</span>
+              </label>
+              <label class="lab-segment">
+                <input type="radio" name="bot-multi-entry-mode" value="sequential" checked />
+                <span>Sequential</span>
+              </label>
+            </div>
+            <p class="bot-profile-hint">Simultaneous: stack up to max open positions at once. Sequential: one position at a time — re-enter after exit until max entries per window.</p>
+          </div>
+          <label class="control-group hidden" id="bot-max-trades-group" for="bot-max-trades-market">
+            <span class="control-label" id="bot-max-trades-label">Max open positions per market</span>
+            <input id="bot-max-trades-market" class="control-input" type="number" min="2" max="5" value="2" />
+          </label>
+          <label class="control-group hidden" id="bot-entry-cooldown-group" for="bot-min-entry-cooldown">
+            <span class="control-label">Min seconds between entries (optional)</span>
+            <input id="bot-min-entry-cooldown" class="control-input" type="number" min="0" step="1" placeholder="0" />
+          </label>
+        </div>
+        <p id="bot-trading-preview" class="bot-profile-hint" aria-live="polite"></p>
       </div>
       <div class="bot-profile-section">
         <h3 class="bot-subsection-title">Bet sizing</h3>
-        <p class="bot-profile-hint">How much USDC to risk per entry. Saved with the active profile.</p>
         <div class="lab-segmented bot-sizing-modes" role="radiogroup" aria-label="Bet sizing mode">
           <label class="lab-segment">
             <input type="radio" name="bot-sizing-mode" value="kelly" />
@@ -180,63 +179,20 @@
           </div>
         </div>
         <p id="bot-sizing-preview" class="bot-profile-hint" aria-live="polite"></p>
-        <div class="control-group">
-          <div class="btn-row">
-            <button id="bot-save-profile-btn" type="button" class="btn btn-secondary">Save profile</button>
-            <a href="/lab" class="btn btn-secondary">Strategy Lab →</a>
-          </div>
-        </div>
       </div>
       <div class="bot-controls-grid bot-actions-row">
         <div class="control-group">
-          <span class="control-label">Actions</span>
           <div class="btn-row">
-            <button id="bot-start-btn" type="button" class="btn btn-primary">Start bot with profile</button>
-            <button id="bot-stop-btn" type="button" class="btn btn-danger">Stop bot</button>
+            <button id="bot-start-btn" type="button" class="btn btn-primary">Start</button>
+            <button id="bot-stop-btn" type="button" class="btn btn-danger">Stop</button>
           </div>
         </div>
-        <div class="control-group">
-          <span class="control-label">Cash</span>
-          <strong id="bot-cash" class="bankroll-value">$—</strong>
-          <span class="meta-inline">baseline <span id="bot-starting-cash">$—</span></span>
-        </div>
-        <div class="control-group cash-adjust-inline">
-          <span class="control-label">Adjust cash</span>
-          <div class="cash-adjust-inline-row">
-            <input id="bot-cash-amount" class="control-input" type="number" min="0.01" step="0.01" placeholder="Amt" />
-            <button type="button" id="bot-cash-add" class="btn btn-secondary">+</button>
-            <button type="button" id="bot-cash-remove" class="btn btn-secondary">−</button>
-          </div>
-          <p id="bot-cash-status" class="cash-adjust-status" aria-live="polite"></p>
-        </div>
-        <div class="control-group">
-          <span class="control-label">Open uPnL</span>
-          <strong id="bot-upnl" class="metric-value">$—</strong>
-        </div>
-        <div class="control-group">
-          <span class="control-label">Equity</span>
-          <strong id="bot-equity" class="metric-value">$—</strong>
-        </div>
-        <div class="control-group">
-          <span class="control-label">PID / mode</span>
-          <span class="meta-inline"><span id="bot-pid">—</span> · <span id="bot-mode">paper</span></span>
-        </div>
-      </div>
-    </section>
-
-    <section class="card-panel page-panel">
-      <div class="panel-head">
-        <h2>Recent positions &amp; events</h2>
-        <a class="panel-link" href="/portfolio">Full portfolio →</a>
-      </div>
-      <div class="positions-list" id="bot-positions">
-        <div class="market-row empty">Trade events appear here when the bot runs.</div>
       </div>
     </section>
 
     <section class="card-panel page-panel bot-log-section">
       <div class="panel-head">
-        <h2>Bot logs</h2>
+        <h2>Logs</h2>
       </div>
       <div class="log bot-log-panel" id="bot-log"></div>
     </section>
@@ -244,7 +200,6 @@
 
   <script src="/js/core.js"></script>
   <script src="/js/layout.js"></script>
-  <script src="/js/cashAdjust.js"></script>
   <script src="/js/botProfileUi.js"></script>
   <script src="/js/sizingUi.js"></script>
   <script src="/js/pages/bot.js"></script>

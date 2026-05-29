@@ -7,11 +7,12 @@
   "maxPositionPctOfLiquidity": 5,
   "ticksFromMid": 3,
   "gateMode": "warn",
-  "sizingMode": "compound",
+  "sizingMode": "percent",
   "fixedBetUsd": 20,
+  "betPercent": 25,
   "kellyFractionCap": 0.08,
   "defaultWinRate": 0.55,
-  "id": "env-default",
-  "name": "Environment defaults",
-  "appliedAt": 1780057234102
+  "id": "default",
+  "name": "default",
+  "appliedAt": 1780070729025
 }
