@@ -27,6 +27,75 @@
 
   const polyHistory = [];
   const binanceHistory = [];
+  const tradeTape = document.getElementById('trade-tape');
+  const tradePopupHost = document.getElementById('trade-popup-host');
+  const MAX_TAPE = 80;
+  const MAX_POPUPS = 5;
+  const POPUP_MS = 2800;
+
+  function tradeSideClass(trade) {
+    const side = String(trade.side || '').toUpperCase();
+    const clob = String(trade.clobSide || '').toLowerCase();
+    if (clob === 'sell') return 'tape-sell';
+    return side === 'NO' ? 'tape-no' : 'tape-yes';
+  }
+
+  function tradePopupClass(trade) {
+    const side = String(trade.side || '').toUpperCase();
+    const clob = String(trade.clobSide || '').toLowerCase();
+    if (clob === 'sell') return 'popup-sell';
+    return side === 'NO' ? 'popup-no' : 'popup-yes';
+  }
+
+  function tradeAmountLabel(trade) {
+    if (Number.isFinite(trade.usdc)) return D.fmtDollars(trade.usdc);
+    if (Number.isFinite(trade.size)) return `${D.fmtSize(trade.size)} sh`;
+    return '—';
+  }
+
+  function appendTradeTapeRow(trade, ts) {
+    if (!tradeTape) return;
+    const side = String(trade.side || '—').toUpperCase();
+    const row = document.createElement('div');
+    row.className = `trade-tape-row ${tradeSideClass(trade)}`;
+    row.innerHTML = `
+      <span class="tape-side">${side}</span>
+      <span class="tape-amt">${tradeAmountLabel(trade)}</span>
+      <span class="tape-px">${D.fmtPrice(trade.price, 3)}</span>
+      <span class="tape-ts">${ts}</span>
+    `;
+    tradeTape.prepend(row);
+    while (tradeTape.children.length > MAX_TAPE) tradeTape.removeChild(tradeTape.lastChild);
+  }
+
+  function showTradePopup(trade) {
+    if (!tradePopupHost) return;
+    const side = String(trade.side || '—').toUpperCase();
+    const el = document.createElement('div');
+    el.className = `trade-popup ${tradePopupClass(trade)}`;
+    el.textContent = `${side} ${tradeAmountLabel(trade)} @ ${D.fmtPrice(trade.price, 3)}`;
+    tradePopupHost.prepend(el);
+    requestAnimationFrame(() => el.classList.add('visible'));
+    setTimeout(() => {
+      el.classList.remove('visible');
+      setTimeout(() => el.remove(), 250);
+    }, POPUP_MS);
+    while (tradePopupHost.children.length > MAX_POPUPS) {
+      tradePopupHost.removeChild(tradePopupHost.lastChild);
+    }
+  }
+
+  function handlePolymarketTrade(msg) {
+    const ts = D.fmtTs(msg.ts_ms || msg.timestamp || Date.now());
+    appendTradeTapeRow(msg, ts);
+    showTradePopup(msg);
+    const side = String(msg.side || '—').toUpperCase();
+    prependLog(
+      polyLog,
+      `<strong>${side}</strong> ${tradeAmountLabel(msg)} @ ${D.fmtPrice(msg.price, 3)} · ${ts}`,
+      tradeSideClass(msg).replace('tape-', 'bot-'),
+    );
+  }
 
   function prependLog(el, html, cls) {
     if (!el) return;
@@ -169,6 +238,9 @@
     const ts = D.fmtTs(msg.timestamp || Date.now());
     if (msg.source === 'system' && (msg.type === 'init' || msg.type === 'mode_changed' || msg.type === 'status')) {
       renderPrimary();
+    }
+    if (msg.source === 'polymarket' && msg.type === 'trade') {
+      handlePolymarketTrade(msg);
     }
     if (msg.source === 'polymarket' && (msg.type === 'markets' || msg.type === 'price')) {
       renderPolyPrices(ts);

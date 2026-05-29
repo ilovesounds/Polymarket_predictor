@@ -64,6 +64,7 @@ function normalizeTradeEvent(input) {
     orderbookDepth: toNumber(input.orderbookDepth, 2),
     signalReason: input.signalReason || null,
     exitReason: input.exitReason || null,
+    resolvedOutcome: input.resolvedOutcome || null,
     won: typeof input.won === 'boolean' ? input.won : null,
     pnl: toNumber(input.pnl, 4),
     cashBefore: toNumber(input.cashBefore ?? input.bankrollBefore, 2),
@@ -132,6 +133,8 @@ function formatTradeLogLine(event) {
       pnl: event.pnl,
       market,
       exitReason: event.exitReason,
+      payout: event.exitProceeds,
+      resolvedOutcome: event.resolvedOutcome,
     });
   }
   return event.signalReason || event.question || event.tradeId || 'trade event';
@@ -177,6 +180,7 @@ function publishToDashboard(event) {
     won: event.won,
     mode: event.mode,
     exitReason: event.exitReason,
+    resolvedOutcome: event.resolvedOutcome,
     cashBefore: event.cashBefore,
     cashAfter: event.cashAfter,
     tradeId: event.tradeId,

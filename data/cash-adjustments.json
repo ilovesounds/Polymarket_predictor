@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "netCashDelta": 10,
+  "startingCashBaseline": null,
+  "entries": [
+    {
+      "id": "2c342705-d946-40b9-902f-ed210c7337a3",
+      "delta": 10,
+      "timestamp": 1780056162181,
+      "updateBaseline": false,
+      "note": null,
+      "appliedAt": null
+    }
+  ]
+}

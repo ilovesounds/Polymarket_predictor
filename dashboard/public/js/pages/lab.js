@@ -4,6 +4,7 @@
 (() => {
   const D = window.Dashboard;
   const P = window.BotProfileUi;
+  const S = window.SizingUi;
   if (!D) return;
 
   const LOCAL_PRESET_KEY = 'strategyLabPresetDraft';
@@ -64,11 +65,16 @@
 
   const sizingPanels = {
     fixed: document.getElementById('sizing-panel-fixed'),
+    percent: document.getElementById('sizing-panel-percent'),
     kelly: document.getElementById('sizing-panel-kelly'),
     compound: document.getElementById('sizing-panel-compound'),
   };
   const fixedBetInput = document.getElementById('fixed-bet-usd');
-  const sizingRadios = () => [...document.querySelectorAll('input[name="sizing-mode"]')];
+  const betPercentSlider = document.getElementById('bet-percent');
+  const betPercentInput = document.getElementById('bet-percent-input');
+  const betPercentOutput = document.getElementById('out-bet-percent');
+  const sizingPreviewEl = document.getElementById('lab-sizing-preview');
+  const sizingRadios = () => S?.getRadios('sizing-mode') || [];
 
   let lastParams = null;
   let lastGate = null;
@@ -153,12 +159,26 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
   }
 
   function getSelectedSizingMode() {
-    const checked = sizingRadios().find((r) => r.checked);
-    return checked?.value || 'compound';
+    return S?.getSelectedMode('sizing-mode') || 'compound';
+  }
+
+  async function refreshSizingPreview() {
+    if (!sizingPreviewEl) return;
+    const bankroll = D.getPortfolio()?.cash;
+    if (!Number.isFinite(bankroll)) return;
+    const mode = getSelectedSizingMode();
+    const pct = Number(betPercentInput?.value || 25);
+    const fixed = Number(fixedBetInput?.value || 5);
+    let bet = bankroll;
+    if (mode === 'percent') bet = Math.min(bankroll, bankroll * (pct / 100));
+    else if (mode === 'fixed') bet = Math.min(fixed, bankroll);
+    else if (mode === 'kelly') bet = Math.min(bankroll * 0.08, bankroll);
+    S.renderPreview(sizingPreviewEl, {
+      label: `Next bet ≈ $${bet.toFixed(2)} (${bankroll > 0 ? ((bet / bankroll) * 100).toFixed(1) : 0}% of $${bankroll.toFixed(2)})`,
+    });
   }
 
   function readFormPreset() {
-    const kellyPct = Number(sliders.kellyFractionCap?.value || 8);
     return {
       name: els.presetName.value.trim() || 'Untitled preset',
       maxSpreadCents: Number(sliders.maxSpreadCents.value),
@@ -169,17 +189,18 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
       maxPositionPctOfLiquidity: Number(sliders.maxPositionPctOfLiquidity.value),
       gateMode: els.gateMode.value,
       ticksFromMid: 3,
-      sizingMode: getSelectedSizingMode(),
-      fixedBetUsd: Number(fixedBetInput?.value || 5),
-      kellyFractionCap: kellyPct / 100,
+      ...S.readSizingFromForm({
+        fixedBetInput,
+        betPercentInput,
+        kellySlider: sliders.kellyFractionCap,
+      }),
     };
   }
 
   function updateSizingPanels(mode = getSelectedSizingMode()) {
-    Object.entries(sizingPanels).forEach(([key, el]) => {
-      if (!el) return;
-      el.classList.toggle('hidden', key !== mode);
-    });
+    S.updatePanels(sizingPanels, mode);
+    if (betPercentOutput && betPercentInput) betPercentOutput.textContent = betPercentInput.value;
+    refreshSizingPreview();
   }
 
   function applyPresetToForm(preset = {}) {
@@ -194,10 +215,21 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
     }
     if (preset.gateMode) els.gateMode.value = preset.gateMode;
     if (preset.sizingMode) {
-      sizingRadios().forEach((r) => { r.checked = r.value === preset.sizingMode; });
+      S.applySizingToForm(preset, {
+        fixedBetInput,
+        betPercentInput,
+        kellySlider: sliders.kellyFractionCap,
+        panels: sizingPanels,
+      });
+    } else {
+      updateSizingPanels(getSelectedSizingMode());
     }
     if (Number.isFinite(preset.fixedBetUsd) && fixedBetInput) {
       fixedBetInput.value = preset.fixedBetUsd;
+    }
+    if (Number.isFinite(preset.betPercent) && betPercentInput) {
+      betPercentInput.value = preset.betPercent;
+      if (betPercentSlider) betPercentSlider.value = preset.betPercent;
     }
     if (Number.isFinite(preset.kellyFractionCap) && sliders.kellyFractionCap) {
       sliders.kellyFractionCap.value = (preset.kellyFractionCap * 100).toFixed(1);
@@ -218,14 +250,7 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
   }
 
   function sizingLabel(mode, preset = {}) {
-    if (mode === 'fixed') return `Fixed $${preset.fixedBetUsd ?? '?'}`;
-    if (mode === 'kelly') {
-      const cap = Number.isFinite(preset.kellyFractionCap)
-        ? `${(preset.kellyFractionCap * 100).toFixed(0)}% cap`
-        : 'Kelly';
-      return `Kelly (${cap})`;
-    }
-    return 'Compound (100% bankroll)';
+    return S.sizingLabel(mode, preset);
   }
 
   function updateCodeTemplateFromForm() {
@@ -402,14 +427,20 @@ module.exports = { id: 'lab_custom', label: 'Lab custom', decide };
     });
   });
 
-  sizingRadios().forEach((radio) => {
-    radio.addEventListener('change', () => {
-      updateSizingPanels();
-      if (lastParams) renderMetrics(lastParams, lastGate, readFormPreset());
-    });
-  });
   fixedBetInput?.addEventListener('input', () => {
+    refreshSizingPreview();
     if (lastParams) renderMetrics(lastParams, lastGate, readFormPreset());
+  });
+
+  S.bindSizingControls({
+    panels: sizingPanels,
+    betPercentSlider,
+    betPercentInput,
+    kellySlider: sliders.kellyFractionCap,
+    onChange: () => {
+      if (lastParams) renderMetrics(lastParams, lastGate, readFormPreset());
+      refreshSizingPreview();
+    },
   });
 
   document.getElementById('btn-save-local')?.addEventListener('click', () => {

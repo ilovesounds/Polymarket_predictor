@@ -446,7 +446,11 @@
         windowLabel: msg.windowLabel,
         timestamp: msg.timestamp || Date.now(),
       };
-      state.portfolio.tradeHistory.unshift(entry);
+      const historyKey = `${entry.tradeId || ''}:${entry.type}:${entry.timestamp}`;
+      const duplicate = state.portfolio.tradeHistory.some((row) =>
+        `${row.tradeId || ''}:${row.type}:${row.timestamp}` === historyKey
+      );
+      if (!duplicate) state.portfolio.tradeHistory.unshift(entry);
       emitPortfolioUpdate(msg.type);
     }
   }
@@ -468,6 +472,8 @@
     eventSource = new EventSource('/api/events/stream');
     eventSource.onopen = () => emit({ source: 'system', type: 'sse_open', timestamp: Date.now() });
     eventSource.onmessage = (ev) => {
+      // Server broadcasts on both WS and SSE; ignore SSE when WS is live to avoid duplicate UI updates.
+      if (ws?.readyState === WebSocket.OPEN) return;
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       handleMessage(msg);

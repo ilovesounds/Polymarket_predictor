@@ -41,7 +41,7 @@ function buildLabParamsPayload(market, book, betSizeUsdc = null) {
       gateMode: activePreset.gateMode,
       sizingMode: sizingConfig.sizingMode,
       fixedBetUsd: sizingConfig.fixedBetUsd,
-      kellyFractionCap: sizingConfig.kellyFractionCap,
+      betPercent: sizingConfig.betPercent,
     },
   };
 

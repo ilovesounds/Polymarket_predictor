@@ -38,7 +38,12 @@ function connectBinanceFeed(onPrice) {
   function connect() {
     binanceWs = new WS(WS_URL);
     binanceWs.onmessage = (msg) => {
-      const data = JSON.parse(msg.data);
+      let data;
+      try {
+        data = JSON.parse(msg.data);
+      } catch (_) {
+        return;
+      }
       const receivedAt = Date.now();
       const sourceTs = Number(data.T || data.E) || receivedAt;
       const price = parseFloat(data.p);

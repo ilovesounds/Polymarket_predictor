@@ -36,15 +36,16 @@ function spreadFromBook(book) {
  * @param {object[]} markets
  * @param {Record<string, object>} openPositions
  * @param {number[]} allowedWindows
+ * @param {object} [entryRules]
  */
-function buildWatchlist(markets, openPositions = {}, allowedWindows = []) {
+function buildWatchlist(markets, openPositions = {}, allowedWindows = [], entryRules = {}) {
   const now = Date.now();
   const ids = new Set();
   for (const m of markets || []) {
     if (!m?.conditionId) continue;
     if (!allowedWindows.includes(m.windowMinutes)) continue;
     const timeRemaining = Math.max(0, (m.endTime - now) / 1000);
-    if (isWithinTradingWindow(m, timeRemaining)) ids.add(m.conditionId);
+    if (isWithinTradingWindow(m, timeRemaining, entryRules)) ids.add(m.conditionId);
   }
   for (const cid of Object.keys(openPositions || {})) {
     ids.add(cid);

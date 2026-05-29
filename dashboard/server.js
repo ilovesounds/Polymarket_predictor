@@ -35,6 +35,7 @@ const {
   listPresets,
   savePreset,
   getActivePreset,
+  getPresetById,
   setActivePreset,
   defaultPresetFields,
 } = require('../lib/strategyLab');
@@ -75,6 +76,25 @@ const {
   appendCashAdjustment,
   resolvePortfolioCashFromAdjustments,
 } = require('../lib/cashAdjustments');
+const {
+  ensureDefaultProfiles,
+  listBotProfiles,
+  getBotProfileById,
+  saveNamedProfile,
+  deleteNamedProfile,
+  duplicateNamedProfile,
+  profileBotFields,
+  profileLabPresetFields,
+  profileToSpawnEnv,
+  previewBetForProfile,
+  normalizeNamedProfile,
+} = require('../lib/botProfilesStore');
+const {
+  loadPaperWallet,
+  walletToPortfolioState,
+  portfolioStateToWallet,
+} = require('../lib/paperWallet');
+const { previewBetLabel } = require('../lib/betSizing');
 
 const PORT = Number(process.env.DASHBOARD_PORT || 3847);
 const STARTING_CASH = Number.parseFloat(
@@ -110,7 +130,9 @@ let polySubscriptionCycle = 0;
 let botProcess = null;
 let botStopPromise = null;
 let botLifecycle = Promise.resolve();
-const botProfile = loadBotProfile(process.env);
+let botProfile = loadBotProfile(process.env);
+ensureDefaultProfiles();
+let activeProfileId = process.env.BOT_PROFILE_ID || 'default';
 let selectedStrategy = botProfile.strategyId;
 let selectedBotMarketWindow = botProfile.marketWindow;
 let botRunLimit = { ...botProfile.runLimit };
@@ -142,18 +164,20 @@ let lastPolyWsEmitAt = 0;
 /** @type {Map<string, { priceToBeat: number, windowStartTime: number, priceToBeatSource: string }>} */
 const priceToBeatCache = new Map();
 let chainlinkPollTimer = null;
+
+const initialCashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
 const botState = {
   running: false,
   pid: null,
   mode: 'paper',
   cash: initialCashState.cash,
+  profileId: null,
   startedAt: null,
   stoppedAt: null,
   lastExitCode: null,
   logs: [],
 };
 
-const initialCashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
 const portfolioState = {
   mode: 'paper',
   cash: initialCashState.cash,
@@ -163,7 +187,52 @@ const portfolioState = {
   openPositions: [],
   tradeHistory: [],
   updatedAt: null,
+  profileId: activeProfileId,
 };
+
+function loadPortfolioForProfile(profileId) {
+  const id = profileId || activeProfileId || 'default';
+  const wallet = loadPaperWallet(id, STARTING_CASH);
+  const state = walletToPortfolioState(wallet);
+  portfolioState.cash = state.cash;
+  portfolioState.startingCash = state.startingCash;
+  portfolioState.netCashDelta = state.netCashDelta;
+  portfolioState.realizedPnlTotal = state.realizedPnlTotal;
+  portfolioState.openPositions = state.openPositions;
+  portfolioState.tradeHistory = state.tradeHistory;
+  portfolioState.updatedAt = state.updatedAt;
+  portfolioState.profileId = id;
+  activeProfileId = id;
+  botState.cash = portfolioState.cash;
+}
+
+function persistActiveProfileWallet() {
+  const id = botState.running ? (botState.profileId || activeProfileId) : activeProfileId;
+  if (!id) return;
+  portfolioStateToWallet(id, portfolioState);
+}
+
+function applyNamedProfileToSession(profile) {
+  if (!profile) return null;
+  applyBotProfile(profileBotFields(profile), { persist: false });
+  setActivePreset(profileLabPresetFields(profile));
+  activeProfileId = profile.id;
+  loadPortfolioForProfile(profile.id);
+  return profile;
+}
+
+function pickSizingBody(body = {}) {
+  const out = {};
+  if (body.sizingMode != null) out.sizingMode = body.sizingMode;
+  if (body.fixedBetUsd != null) out.fixedBetUsd = body.fixedBetUsd;
+  if (body.betPercent != null) out.betPercent = body.betPercent;
+  if (body.kellyFractionCap != null) out.kellyFractionCap = body.kellyFractionCap;
+  if (body.defaultWinRate != null) out.defaultWinRate = body.defaultWinRate;
+  if (body.cashFraction != null) out.cashFraction = body.cashFraction;
+  return out;
+}
+
+loadPortfolioForProfile(activeProfileId);
 
 function resolveCashFromBody(body) {
   if (Number.isFinite(body.cash)) return body.cash;
@@ -266,10 +335,12 @@ function portfolioSnapshot() {
     roiPct,
     tradeHistory: portfolioState.tradeHistory,
     updatedAt: portfolioState.updatedAt,
+    profileId: activeProfileId,
     bot: {
       running: botState.running,
       mode: botState.mode,
       strategyId: selectedStrategy,
+      profileId: botState.profileId || activeProfileId,
     },
   };
 }
@@ -386,6 +457,8 @@ function applyPortfolioEvent(body = {}) {
       betSize: body.betSize ?? null,
       pnl: body.pnl ?? null,
       won: typeof body.won === 'boolean' ? body.won : null,
+      exitReason: body.exitReason ?? null,
+      resolvedOutcome: body.resolvedOutcome ?? null,
       question: body.question || null,
       windowMinutes: body.windowMinutes ?? null,
       windowLabel: body.windowLabel || null,
@@ -394,17 +467,11 @@ function applyPortfolioEvent(body = {}) {
       timestamp: body.timestamp || Date.now(),
     });
   }
+  persistActiveProfileWallet();
 }
 
-function resetPortfolioSession() {
-  const cashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
-  portfolioState.cash = cashState.cash;
-  portfolioState.startingCash = cashState.startingCash;
-  portfolioState.netCashDelta = cashState.netCashDelta;
-  portfolioState.realizedPnlTotal = 0;
-  portfolioState.openPositions = [];
-  portfolioState.updatedAt = Date.now();
-  botState.cash = cashState.cash;
+function resetPortfolioSession(profileId = activeProfileId) {
+  loadPortfolioForProfile(profileId || 'default');
 }
 
 function parseCashAdjustmentRequest(body = {}) {
@@ -453,6 +520,7 @@ function applyPortfolioCashAdjustment({ delta, updateBaseline = false, note = nu
   }
   portfolioState.updatedAt = Date.now();
   botState.cash = portfolioState.cash;
+  persistActiveProfileWallet();
   const snapshot = broadcastPortfolio({
     cashAdjustment: { delta, updateBaseline, note },
   });
@@ -637,6 +705,7 @@ function sendStatus() {
       startedAt: botState.startedAt,
       stoppedAt: botState.stoppedAt,
       lastExitCode: botState.lastExitCode,
+      profileId: botState.profileId || activeProfileId,
       ...botSessionSnapshot(),
     },
   };
@@ -1175,11 +1244,16 @@ function applyBotSessionConfig(body = {}) {
   applyBotProfile(body);
 }
 
-function spawnBotEnv() {
+function spawnBotEnv(profileId = activeProfileId) {
+  const profile = getBotProfileById(profileId) || getBotProfileById('default');
   const botNatsFeeds = process.env.BOT_USE_NATS_FEEDS === 'true' || USE_NATS_FEEDS;
+  const profileEnv = profile ? profileToSpawnEnv(profile, process.env) : {
+    ...profileToEnv(botProfileSnapshot()),
+    SIZING_MODE: resolveSizingConfig(getActivePreset()).sizingMode,
+  };
   return {
     ...process.env,
-    ...profileToEnv(botProfileSnapshot()),
+    ...profileEnv,
     PAPER_TRADE: 'true',
     ENABLE_DASHBOARD_FEED: 'true',
     DASHBOARD_PORT: String(PORT),
@@ -1190,30 +1264,35 @@ function spawnBotEnv() {
   };
 }
 
-function startBotProcess() {
+function startBotProcess(profileId = activeProfileId) {
   if (botProcess && !botProcess.killed && botState.running) {
     return { ok: false, statusCode: 409, body: { error: 'Bot already running', bot: botState } };
   }
   if (botStopPromise) {
     return { ok: false, statusCode: 409, body: { error: 'Bot is still stopping', bot: botState } };
   }
+  const profile = getBotProfileById(profileId);
+  if (profile) applyNamedProfileToSession(profile);
+  const spawnProfileId = profile?.id || profileId || activeProfileId || 'default';
   const child = spawn(process.execPath, ['bot.js'], {
     cwd: ROOT_DIR,
-    env: spawnBotEnv(),
+    env: spawnBotEnv(spawnProfileId),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   botProcess = child;
   botState.running = true;
   botState.pid = child.pid || null;
   botState.mode = 'paper';
+  botState.profileId = spawnProfileId;
   botState.startedAt = Date.now();
   botState.stoppedAt = null;
   botState.lastExitCode = null;
-  resetPortfolioSession();
+  resetPortfolioSession(spawnProfileId);
   setupBotProcessHandlers(child);
   const session = botSessionSnapshot();
+  const profileName = getBotProfileById(spawnProfileId)?.name || spawnProfileId;
   broadcast(makeBotLogLine(
-    `Bot started (pid=${botState.pid || 'n/a'}) · markets=${session.marketWindow} · ${session.runLimit.mode === 'trades' ? `limit ${session.runLimit.tradeCount} trades` : session.runLimit.mode === 'end_of_day' ? 'until EOD' : 'no limit'}`,
+    `Bot started (pid=${botState.pid || 'n/a'}) · profile=${profileName} · markets=${session.marketWindow} · ${session.runLimit.mode === 'trades' ? `limit ${session.runLimit.tradeCount} trades` : session.runLimit.mode === 'end_of_day' ? 'until EOD' : 'no limit'}`,
     'info'
   ));
   broadcastPortfolio();
@@ -1560,7 +1639,12 @@ function startHttpServer() {
       }
       return;
     }
-    if (req.method === 'GET' && req.url === '/api/portfolio') {
+    if (req.method === 'GET' && req.url.startsWith('/api/portfolio')) {
+      const urlQuery = req.url.includes('?') ? new URLSearchParams(req.url.split('?')[1]) : null;
+      const profileQuery = urlQuery?.get('profileId');
+      if (profileQuery && profileQuery !== activeProfileId && !botState.running) {
+        loadPortfolioForProfile(profileQuery);
+      }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(portfolioSnapshot()));
       return;
@@ -1680,14 +1764,101 @@ function startHttpServer() {
       }
       return;
     }
+    if (req.method === 'GET' && req.url === '/api/bot/profiles') {
+      const profiles = listBotProfiles();
+      const active = getBotProfileById(activeProfileId);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        profiles,
+        activeProfileId,
+        activeProfile: active,
+        sizingPreview: active ? previewBetForProfile(active, portfolioState.cash) : null,
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/bot/profiles') {
+      try {
+        const body = await readJsonBody(req);
+        if (body.action === 'delete' && body.id) {
+          if (listBotProfiles().length <= 1) {
+            res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Cannot delete the last profile' }));
+            return;
+          }
+          const profiles = deleteNamedProfile(body.id);
+          if (activeProfileId === body.id) {
+            loadPortfolioForProfile(profiles[0]?.id || 'default');
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ profiles, activeProfileId, deleted: body.id }));
+          return;
+        }
+        if (body.action === 'duplicate' && body.id) {
+          const copy = duplicateNamedProfile(body.id, body.name);
+          if (!copy) {
+            res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ error: 'Profile not found' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ profile: copy, profiles: listBotProfiles() }));
+          return;
+        }
+        const merged = normalizeNamedProfile({
+          ...getBotProfileById(body.id || activeProfileId),
+          ...body,
+          id: body.id || body.name,
+          name: body.name || body.id,
+        });
+        const saved = saveNamedProfile(merged);
+        if (body.select || body.apply) {
+          applyNamedProfileToSession(saved);
+          sendStatus();
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          profile: saved,
+          profiles: listBotProfiles(),
+          activeProfileId,
+          sizingPreview: previewBetForProfile(saved, portfolioState.cash),
+        }));
+      } catch (e) {
+        const status = e instanceof SyntaxError ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message || 'Request failed' }));
+      }
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/bot/instances') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        instances: botState.running
+          ? [{
+            pid: botState.pid,
+            profileId: botState.profileId,
+            startedAt: botState.startedAt,
+            mode: botState.mode,
+          }]
+          : [],
+        running: botState.running,
+      }));
+      return;
+    }
     if (req.method === 'GET' && req.url === '/api/bot/profile') {
       const activePreset = getActivePreset();
+      const profile = getBotProfileById(activeProfileId);
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify({
         profile: botProfileSnapshot(),
+        namedProfile: profile,
+        activeProfileId,
         botSession: botSessionSnapshot(),
         strategies: strategyOptions,
         activeLabPreset: { id: activePreset.id, name: activePreset.name },
+        sizing: resolveSizingConfig(activePreset),
+        sizingPreview: profile
+          ? previewBetForProfile(profile, portfolioState.cash)
+          : previewBetLabel(portfolioState.cash, resolveSizingConfig(activePreset)),
         running: botState.running,
       }));
       return;
@@ -1696,6 +1867,16 @@ function startHttpServer() {
       try {
         const body = await readJsonBody(req);
         applyBotProfile(body);
+        if (body.sizingMode || body.betPercent != null || body.fixedBetUsd != null) {
+          const active = getActivePreset();
+          setActivePreset({ ...active, ...pickSizingBody(body) });
+        }
+        if (activeProfileId) {
+          const current = getBotProfileById(activeProfileId);
+          if (current) {
+            saveNamedProfile(normalizeNamedProfile({ ...current, ...body, id: activeProfileId }));
+          }
+        }
         if (body.applyLabPreset) {
           const active = getActivePreset();
           setActivePreset(active);
@@ -1705,12 +1886,16 @@ function startHttpServer() {
         res.end(JSON.stringify({
           profile: botProfileSnapshot(),
           botSession: botSessionSnapshot(),
+          activeProfileId,
           selectedStrategy,
           running: botState.running,
         }));
-      } catch (_) {
-        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ error: 'Bad JSON' }));
+      } catch (e) {
+        const status = e instanceof SyntaxError ? 400 : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          error: e instanceof SyntaxError ? 'Bad JSON' : (e.message || 'Request failed'),
+        }));
       }
       return;
     }
@@ -1741,14 +1926,16 @@ function startHttpServer() {
         startBody = {};
       }
       applyBotSessionConfig(startBody);
+      const startProfileId = startBody.profileId || activeProfileId;
       const result = await enqueueBotLifecycle(async () => {
         if (botStopPromise) await botStopPromise;
         await publishBotControl('start', {
           strategyId: selectedStrategy,
           mode: selectedPolyMode,
+          profileId: startProfileId,
           ...botSessionSnapshot(),
         });
-        return startBotProcess();
+        return startBotProcess(startProfileId);
       });
       res.writeHead(result.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(result.body));
@@ -1896,6 +2083,7 @@ function startHttpServer() {
           name: active.name,
           sizingMode: active.sizingMode,
           fixedBetUsd: active.fixedBetUsd,
+          betPercent: active.betPercent,
           kellyFractionCap: active.kellyFractionCap,
         },
       }));
@@ -1936,7 +2124,11 @@ function startHttpServer() {
     if (req.method === 'POST' && req.url === '/api/lab/preset/apply') {
       try {
         const body = await readJsonBody(req);
-        const preset = body?.id ? listPresets().find((p) => p.id === body.id) : body;
+        let preset = body;
+        if (body?.id) {
+          preset = getPresetById(body.id)
+            || (getActivePreset().id === body.id ? getActivePreset() : null);
+        }
         if (!preset) {
           res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ error: 'Preset not found' }));

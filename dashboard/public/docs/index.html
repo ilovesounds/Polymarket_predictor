@@ -232,6 +232,8 @@ cp .env.example .env</pre>
               <tr><td><code>nats:up</code></td><td><code>docker compose up -d nats</code></td><td>Start NATS on ports <code>4222</code> (client) and <code>8222</code> (monitoring).</td></tr>
               <tr><td><code>nats:down</code></td><td><code>docker compose down</code></td><td>Stop compose stack.</td></tr>
               <tr><td><code>feeds:nats</code></td><td><code>node feeds/natsPublisher.js</code></td><td>Node publisher: Binance + Polymarket → NATS.</td></tr>
+              <tr><td><code>feeds:rust:build</code></td><td><code>cargo build --release --manifest-path rust/feeds-rs/Cargo.toml</code></td><td>Build the Rust NATS feed publisher binary.</td></tr>
+              <tr><td><code>feeds:rust</code></td><td><code>rust/feeds-rs/target/release/feeds-rs</code></td><td>Run Rust NATS publisher (after <code>feeds:rust:build</code>; needs NATS).</td></tr>
               <tr><td><code>latency:probe</code></td><td><code>node monitoring/latencyProbe.js</code></td><td>CLI probe for Binance/Chainlink stream latency.</td></tr>
               <tr><td><code>check:docs</code></td><td><code>node scripts/check-docs-stale.js</code></td><td>Warn if <code>package.json</code> scripts differ from docs.</td></tr>
             </tbody>
@@ -275,8 +277,11 @@ export MARKET_WINDOW=15
         <h3>HTTP API (dashboard server)</h3>
         <ul>
           <li><code>GET /api/bot/status</code> — bot state, strategy list</li>
-          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> child process (start body may include <code>marketWindow</code> and <code>runLimit</code>)</li>
-          <li><code>GET /api/bot/config</code> / <code>POST /api/bot/config</code> — bot market window + run limit (trades / end of day)</li>
+          <li><code>GET /api/bot/profile</code> / <code>POST /api/bot/profile</code> — session profile (strategy, stops, entry window)</li>
+          <li><code>GET /api/bot/profiles</code> / <code>POST /api/bot/profiles</code> — named bot profiles (create, save, duplicate, delete, select)</li>
+          <li><code>GET /api/bot/instances</code> — running bot instance(s) with <code>profileId</code></li>
+          <li><code>GET /api/portfolio?profileId=…</code> — paper wallet for a profile (<code>data/paper-wallets/{id}.json</code>)</li>
+          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> (start body: <code>profileId</code>, <code>marketWindow</code>, <code>runLimit</code>, sizing fields)</li>
           <li><code>GET /api/bot/strategies</code> / <code>POST /api/bot/strategy</code> — list or set strategy</li>
           <li><code>GET /api/polymarket/mode</code> / <code>POST /api/polymarket/mode</code> — 5m / 15m / 1d / both / all filter</li>
           <li><code>GET /api/markets?window=5m|15m|1d</code> — all live BTC markets for that window (Gamma, 30s cache)</li>
@@ -323,20 +328,30 @@ export MARKET_WINDOW=15
           <table class="docs-table">
             <thead><tr><th>Mode</th><th>Formula</th><th>Notes</th></tr></thead>
             <tbody>
-              <tr><td><strong>Compound</strong></td><td><code>betSize = bankroll</code></td><td>Default — full current bankroll (wins/losses compound).</td></tr>
+              <tr><td><strong>Compound</strong></td><td><code>betSize = bankroll × cashFraction</code></td><td>Default — full current bankroll (wins/losses compound).</td></tr>
               <tr><td><strong>Fixed</strong></td><td><code>betSize = min(fixedBetUsd, bankroll)</code></td><td>Flat USDC per trade; set in UI or <code>FIXED_BET_USD</code>.</td></tr>
+              <tr><td><strong>Percent</strong></td><td><code>betSize = min(bankroll, bankroll × betPercent/100)</code></td><td>Risk a slice of bankroll each trade (e.g. 25%). UI slider 1–100%.</td></tr>
+              <tr><td><strong>Amount cap</strong></td><td><code>betSize = min(fixedBetUsd, bankroll × betPercent/100)</code></td><td>Whichever is smaller — fixed USD or percent of bankroll.</td></tr>
               <tr><td><strong>Kelly</strong></td><td>Kelly from edge, R:R, tier fraction; capped by <code>kellyFractionCap × bankroll</code> and 3% of orderbook depth</td><td>Uses <code>risk/manager.js</code> <code>computeBetSize</code>; win rate from Bayesian tracker (prior ~55%).</td></tr>
             </tbody>
           </table>
         </div>
-        <p>On entry, logs include <code>sizing=&lt;mode&gt;</code> and size, e.g. <code>[PositionOpen] … sizing=fixed | size=$5.00</code>.</p>
+        <p>On entry, logs include profile and sizing, e.g. <code>[PositionOpen] profile=conservative-25 | sizing=percent(25%) | size=$5.00</code>. The UI shows a preview: <strong>Next bet ≈ $X.XX (Y% of $bankroll)</strong>.</p>
+        <h3>Named bot profiles</h3>
+        <p>
+          On <a href="/bot">/bot</a>, use the <strong>Bot profile</strong> dropdown to switch between saved configs
+          (<code>data/bot-profiles.json</code>). Each profile has its own paper wallet in
+          <code>data/paper-wallets/{profileId}.json</code>. Click <strong>Start bot with profile</strong> to spawn
+          <code>bot.js</code> with <code>BOT_PROFILE_ID</code> and profile sizing env vars. Default seeds:
+          <code>default</code> (compound) and <code>conservative-25</code> (25% percent sizing).
+        </p>
         <h3>Apply preset to bot</h3>
         <ol>
           <li>Adjust microstructure sliders and bet sizing on Strategy Lab → <strong>Apply to bot</strong>.</li>
-          <li>Server writes <code>data/strategy-active-preset.json</code> (includes <code>sizingMode</code>, <code>fixedBetUsd</code>, <code>kellyFractionCap</code>).</li>
+          <li>Server writes <code>data/strategy-active-preset.json</code> (includes <code>sizingMode</code>, <code>fixedBetUsd</code>, <code>betPercent</code>, <code>kellyFractionCap</code>).</li>
           <li><code>bot.js</code> reads the active preset each market check (no restart required).</li>
         </ol>
-        <p>Presets are stored in <code>data/strategy-presets.json</code>. Env fallbacks: <code>SIZING_MODE</code>, <code>FIXED_BET_USD</code>. Code builder exports a JS stub referencing the <code>params</code> object for custom strategies in <code>signals/strategies_runtime.js</code>.</p>
+        <p>Presets are stored in <code>data/strategy-presets.json</code>. Env fallbacks: <code>SIZING_MODE</code>, <code>FIXED_BET_USD</code>, <code>BET_PERCENT_OF_BANKROLL</code>, <code>BOT_PROFILE_ID</code>. Code builder exports a JS stub referencing the <code>params</code> object for custom strategies in <code>signals/strategies_runtime.js</code>.</p>
       </section>
 
       <section id="paper-trading">
@@ -346,7 +361,7 @@ export MARKET_WINDOW=15
         <ol>
           <li>Run <code>npm run dashboard</code> (or <code>npm run dev</code>).</li>
           <li>Open <a href="/bot">/bot</a>.</li>
-          <li>Select a strategy, click <strong>Start</strong>. Logs and bankroll update over WebSocket.</li>
+          <li>Select a <strong>Bot profile</strong> (e.g. Conservative 25%), configure sizing, click <strong>Start bot with profile</strong>. Logs and bankroll update over WebSocket.</li>
           <li>Use <strong>Stop</strong> to SIGTERM the child process (SIGKILL after 6s if needed).</li>
         </ol>
         <h3>From the terminal</h3>

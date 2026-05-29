@@ -1,7 +1,13 @@
 (() => {
   const D = window.Dashboard;
   const P = window.BotProfileUi;
+  const S = window.SizingUi;
   const MAX_LOG = 120;
+
+  const botProfileSelect = document.getElementById('bot-profile-select');
+  const botProfileNewBtn = document.getElementById('bot-profile-new-btn');
+  const botProfileDupBtn = document.getElementById('bot-profile-dup-btn');
+  const botProfileDelBtn = document.getElementById('bot-profile-del-btn');
 
   const botStrategySelect = document.getElementById('bot-strategy-select');
   const botMarketWindowSelect = document.getElementById('bot-market-window-select');
@@ -19,6 +25,16 @@
   const positionsEl = document.getElementById('bot-positions');
   const botUpnlEl = document.getElementById('bot-upnl');
   const botEquityEl = document.getElementById('bot-equity');
+  const botSizingPreview = document.getElementById('bot-sizing-preview');
+  const botFixedBetInput = document.getElementById('bot-fixed-bet-usd');
+  const botBetPercentInput = document.getElementById('bot-bet-percent');
+  const botBetPercentSlider = document.getElementById('bot-bet-percent-slider');
+  const botKellyCapInput = document.getElementById('bot-kelly-cap');
+  const botSizingPanels = {
+    fixed: document.getElementById('bot-sizing-panel-fixed'),
+    percent: document.getElementById('bot-sizing-panel-percent'),
+    kelly: document.getElementById('bot-sizing-panel-kelly'),
+  };
 
   const profileEls = {
     strategySelect: botStrategySelect,
@@ -38,6 +54,8 @@
   };
 
   let controlBusy = false;
+  let activeProfileId = 'default';
+  let namedProfiles = [];
 
   function prependLog(el, html, cls) {
     if (!el) return;
@@ -48,13 +66,84 @@
     while (el.children.length > MAX_LOG) el.removeChild(el.lastChild);
   }
 
+  function readSizingPayload() {
+    return S.readSizingFromForm({
+      fixedBetInput: botFixedBetInput,
+      betPercentInput: botBetPercentInput,
+      kellySlider: botKellyCapInput,
+      name: 'bot-sizing-mode',
+    });
+  }
+
   function currentProfilePayload() {
-    const payload = P.readProfileFromForm(profileEls);
+    const payload = {
+      ...P.readProfileFromForm(profileEls),
+      ...readSizingPayload(),
+      id: activeProfileId,
+    };
     if (profileEls.stopLossMode?.value === 'off') {
       payload.stopLossPct = null;
       payload.stopLossPrice = null;
     }
     return payload;
+  }
+
+  function refreshSizingPreview() {
+    const bankroll = D.getPortfolio()?.cash;
+    if (!Number.isFinite(bankroll) || !botSizingPreview) return;
+    const mode = S.getSelectedMode('bot-sizing-mode');
+    const pct = Number(botBetPercentInput?.value || 25);
+    const fixed = Number(botFixedBetInput?.value || 5);
+    let bet = bankroll;
+    if (mode === 'percent') bet = Math.min(bankroll, bankroll * (pct / 100));
+    else if (mode === 'fixed') bet = Math.min(fixed, bankroll);
+    else if (mode === 'kelly') bet = Math.min(bankroll * 0.08, bankroll);
+    S.renderPreview(botSizingPreview, {
+      label: `Next bet ≈ $${bet.toFixed(2)} (${bankroll > 0 ? ((bet / bankroll) * 100).toFixed(1) : 0}% of $${bankroll.toFixed(2)})`,
+    });
+  }
+
+  function applyNamedProfile(profile) {
+    if (!profile) return;
+    activeProfileId = profile.id;
+    if (botProfileSelect) botProfileSelect.value = profile.id;
+    P.applyProfileToForm(profile, profileEls);
+    S.applySizingToForm(profile, {
+      fixedBetInput: botFixedBetInput,
+      betPercentInput: botBetPercentInput,
+      kellySlider: botKellyCapInput,
+      panels: botSizingPanels,
+      name: 'bot-sizing-mode',
+    });
+    if (profile.strategyId) D.getState().selectedStrategy = profile.strategyId;
+    refreshSizingPreview();
+  }
+
+  function renderProfileSelect(profiles = [], selectedId) {
+    if (!botProfileSelect) return;
+    namedProfiles = profiles;
+    botProfileSelect.innerHTML = profiles
+      .map((p) => `<option value="${p.id}">${p.name} (${S.sizingLabel(p.sizingMode, p)})</option>`)
+      .join('');
+    if (selectedId) botProfileSelect.value = selectedId;
+    activeProfileId = botProfileSelect.value || selectedId || 'default';
+  }
+
+  async function loadProfiles(selectId) {
+    const resp = await fetch('/api/bot/profiles').then((r) => r.json());
+    renderProfileSelect(resp.profiles || [], selectId || resp.activeProfileId);
+    if (resp.activeProfile) applyNamedProfile(resp.activeProfile);
+    if (resp.sizingPreview) S.renderPreview(botSizingPreview, resp.sizingPreview);
+    return resp;
+  }
+
+  async function selectProfile(profileId) {
+    const resp = await D.postJson('/api/bot/profiles', { id: profileId, select: true });
+    if (resp.profile) applyNamedProfile(resp.profile);
+    if (resp.sizingPreview) S.renderPreview(botSizingPreview, resp.sizingPreview);
+    const portfolio = await fetch(`/api/portfolio?profileId=${encodeURIComponent(profileId)}`).then((r) => r.json());
+    D.applyPortfolioSnapshot(portfolio);
+    return resp;
   }
 
   function applyProfileToUi(profile) {
@@ -73,6 +162,10 @@
 
   function setProfileControlsDisabled(disabled) {
     const fields = [
+      botProfileSelect,
+      botProfileNewBtn,
+      botProfileDupBtn,
+      botProfileDelBtn,
       botStrategySelect,
       botMarketWindowSelect,
       botRunLimitSelect,
@@ -85,6 +178,11 @@
       profileEls.entryMinPrice,
       profileEls.entryMaxPrice,
       profileEls.maxTradesPerMarket,
+      botFixedBetInput,
+      botBetPercentInput,
+      botBetPercentSlider,
+      botKellyCapInput,
+      ...S.getRadios('bot-sizing-mode'),
       botSaveProfileBtn,
     ];
     for (const el of fields) {
@@ -122,9 +220,11 @@
 
   async function saveBotProfile() {
     const payload = currentProfilePayload();
+    await D.postJson('/api/bot/profiles', { ...payload, apply: true, select: true });
     const resp = await D.postJson('/api/bot/profile', payload);
     if (resp.profile) applyProfileToUi(resp.profile);
     P.saveDraft(resp.profile || payload);
+    await loadProfiles(activeProfileId);
     return resp;
   }
 
@@ -132,10 +232,10 @@
     setControlBusy(true);
     try {
       await saveBotProfile();
-      const resp = await D.postJson('/api/bot/start', currentProfilePayload());
+      const resp = await D.postJson('/api/bot/start', { profileId: activeProfileId, ...currentProfilePayload() });
       if (resp.bot) Object.assign(D.getState().bot, resp.bot);
       renderBotControl();
-      prependLog(botLog, '<strong>started</strong> with saved profile', 'bot-entry');
+      prependLog(botLog, `<strong>started</strong> profile ${activeProfileId}`, 'bot-entry');
     } catch (e) {
       prependLog(botLog, `<strong>start failed</strong> ${e.message}`, 'bot-exit');
     } finally {
@@ -220,6 +320,7 @@
     renderPortfolioSummary(portfolio);
     renderOpenPositions(portfolio.openPositions || []);
     renderBotControl();
+    refreshSizingPreview();
   }
 
   D.subscribePortfolio((portfolio) => {
@@ -307,9 +408,72 @@
       setControlBusy(true);
       try {
         await saveBotProfile();
-        prependLog(botLog, '<strong>profile</strong> saved', 'bot-check');
+        prependLog(botLog, `<strong>profile</strong> ${activeProfileId} saved`, 'bot-check');
       } catch (e) {
         prependLog(botLog, `<strong>save failed</strong> ${e.message}`, 'bot-exit');
+      } finally {
+        setControlBusy(false);
+      }
+    });
+  }
+  if (botProfileSelect) {
+    botProfileSelect.addEventListener('change', () => {
+      if (D.getState().bot.running) return;
+      selectProfile(botProfileSelect.value).catch((e) => {
+        prependLog(botLog, `<strong>profile load failed</strong> ${e.message}`, 'bot-exit');
+      });
+    });
+  }
+  if (botProfileNewBtn) {
+    botProfileNewBtn.addEventListener('click', async () => {
+      const name = window.prompt('Profile name', 'My profile');
+      if (!name) return;
+      setControlBusy(true);
+      try {
+        const resp = await D.postJson('/api/bot/profiles', {
+          ...currentProfilePayload(),
+          id: name,
+          name,
+          select: true,
+        });
+        if (resp.profile) applyNamedProfile(resp.profile);
+        renderProfileSelect(resp.profiles || [], resp.activeProfileId);
+        prependLog(botLog, `<strong>profile</strong> created ${resp.profile?.id}`, 'bot-check');
+      } catch (e) {
+        prependLog(botLog, `<strong>create failed</strong> ${e.message}`, 'bot-exit');
+      } finally {
+        setControlBusy(false);
+      }
+    });
+  }
+  if (botProfileDupBtn) {
+    botProfileDupBtn.addEventListener('click', async () => {
+      setControlBusy(true);
+      try {
+        const resp = await D.postJson('/api/bot/profiles', { action: 'duplicate', id: activeProfileId });
+        if (resp.profile) {
+          applyNamedProfile(resp.profile);
+          renderProfileSelect(resp.profiles || [], resp.profile.id);
+        }
+        prependLog(botLog, `<strong>profile</strong> duplicated`, 'bot-check');
+      } catch (e) {
+        prependLog(botLog, `<strong>duplicate failed</strong> ${e.message}`, 'bot-exit');
+      } finally {
+        setControlBusy(false);
+      }
+    });
+  }
+  if (botProfileDelBtn) {
+    botProfileDelBtn.addEventListener('click', async () => {
+      if (!window.confirm(`Delete profile "${activeProfileId}"?`)) return;
+      setControlBusy(true);
+      try {
+        const resp = await D.postJson('/api/bot/profiles', { action: 'delete', id: activeProfileId });
+        renderProfileSelect(resp.profiles || [], resp.activeProfileId);
+        await selectProfile(resp.activeProfileId);
+        prependLog(botLog, `<strong>profile</strong> deleted`, 'bot-check');
+      } catch (e) {
+        prependLog(botLog, `<strong>delete failed</strong> ${e.message}`, 'bot-exit');
       } finally {
         setControlBusy(false);
       }
@@ -319,15 +483,24 @@
   if (botStopBtn) botStopBtn.addEventListener('click', stopBot);
 
   P.bindStopLossControls(profileEls);
+  S.bindSizingControls({
+    panels: botSizingPanels,
+    betPercentSlider: botBetPercentSlider,
+    betPercentInput: botBetPercentInput,
+    kellySlider: botKellyCapInput,
+    name: 'bot-sizing-mode',
+    onChange: refreshSizingPreview,
+  });
 
   renderStrategies(D.getState().strategies, D.getState().selectedStrategy);
   renderFromPortfolio(D.getPortfolio());
-  fetch('/api/bot/profile')
-    .then((r) => r.json())
-    .then((resp) => {
-      if (resp.profile) applyProfileToUi(resp.profile);
-      else if (resp.botSession) applyProfileToUi(resp.botSession);
-    })
+  loadProfiles()
+    .catch(() => fetch('/api/bot/profile')
+      .then((r) => r.json())
+      .then((resp) => {
+        if (resp.namedProfile) applyNamedProfile(resp.namedProfile);
+        else if (resp.profile) applyProfileToUi(resp.profile);
+      }))
     .catch(() => {
       const draft = P.loadDraft();
       if (draft) applyProfileToUi(draft);

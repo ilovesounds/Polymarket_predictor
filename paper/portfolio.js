@@ -3,6 +3,8 @@
  * Polymarket CLOB: shares = USDC spent / entry price per share.
  */
 
+const { settlementExitPrice } = require('../lib/marketResolution');
+
 const ET = 'America/New_York';
 
 function round(value, digits = 4) {
@@ -85,6 +87,22 @@ function formatEntryLog({ direction = 'YES', shares, entryPrice, betSize, market
   return `Bought ${fmtShares(shares)} ${side} shares @ ${Number(entryPrice).toFixed(2)} (${fmtUsd(betSize)}) — ${title}`;
 }
 
+function formatResolutionExitLog({
+  direction = 'YES',
+  shares,
+  payout,
+  pnl,
+  outcome,
+}) {
+  const side = String(direction || 'YES').toUpperCase();
+  const won = settlementExitPrice(outcome, side) === 1.0;
+  const result = won ? 'won' : 'lost';
+  const pnlText = Number.isFinite(pnl)
+    ? ` | PnL=${pnl >= 0 ? '+' : ''}${fmtUsd(pnl)}`
+    : '';
+  return `[Exit RESOLVED] ${side} ${result} | shares=${fmtShares(shares)} | payout=${fmtUsd(payout)}${pnlText}`;
+}
+
 function formatExitLog({
   direction = 'YES',
   shares,
@@ -92,13 +110,117 @@ function formatExitLog({
   pnl,
   market,
   exitReason,
+  payout,
+  resolvedOutcome,
 }) {
+  if (exitReason === 'resolution') {
+    return formatResolutionExitLog({
+      direction,
+      shares,
+      payout: Number.isFinite(payout) ? payout : calcExitProceeds(shares, exitPrice),
+      pnl,
+      outcome: resolvedOutcome,
+    });
+  }
   const side = String(direction || 'YES').toUpperCase();
   const window = formatMarketWindowLabel(market);
   const title = market?.question ? `${market.question} ${window}` : window;
   const reason = exitReason ? ` (${String(exitReason).replace(/_/g, ' ')})` : '';
   const pnlText = Number.isFinite(pnl) ? ` · PnL ${pnl >= 0 ? '+' : ''}${fmtUsd(pnl)}` : '';
   return `Sold ${fmtShares(shares)} ${side} shares @ ${Number(exitPrice).toFixed(2)}${pnlText}${reason} — ${title}`;
+}
+
+function positionDirection(pos) {
+  return pos.signal?.direction || pos.direction || pos.side || 'YES';
+}
+
+function positionShares(pos) {
+  if (Number.isFinite(pos.shares)) return pos.shares;
+  return calcShares(pos.costBasis ?? pos.betSize, pos.entryPrice);
+}
+
+function positionCostBasis(pos, shares) {
+  if (Number.isFinite(pos.costBasis)) return pos.costBasis;
+  if (Number.isFinite(pos.betSize)) return pos.betSize;
+  if (Number.isFinite(shares) && Number.isFinite(pos.entryPrice)) return shares * pos.entryPrice;
+  return null;
+}
+
+function marketFromPosition(pos) {
+  if (pos.market) return pos.market;
+  return {
+    conditionId: pos.marketId,
+    question: pos.question,
+    endTime: pos.endTime ?? null,
+    windowMinutes: pos.windowMinutes ?? null,
+    tokenIdYes: pos.tokenIdYes ?? null,
+  };
+}
+
+/**
+ * Cash-settle an open position at market resolution ($1/share if won, $0 if lost).
+ * @param {object} position
+ * @param {'Yes'|'No'} outcome
+ * @param {{ cash?: number, exitTime?: number, market?: object }} [opts]
+ * @returns {{ exitEvent: object, cashAfter: number, realizedPnlDelta: number, proceeds: number }|null}
+ */
+function settleAtResolution(position, outcome, opts = {}) {
+  if (outcome !== 'Yes' && outcome !== 'No') return null;
+
+  const market = opts.market || marketFromPosition(position);
+  const direction = positionDirection(position);
+  const exitPrice = settlementExitPrice(outcome, direction);
+  if (exitPrice == null) return null;
+
+  const shares = positionShares(position);
+  const entryPrice = position.entryPrice;
+  const costBasis = positionCostBasis(position, shares);
+  const pnl = calcRealizedPnl(shares, entryPrice, exitPrice, costBasis);
+  const proceeds = calcExitProceeds(shares, exitPrice);
+  const cashBefore = Number.isFinite(opts.cash) ? opts.cash : 0;
+  const cashAfter = Number.isFinite(proceeds) ? cashBefore + proceeds : cashBefore;
+  const exitTime = opts.exitTime || Date.now();
+  const won = Number.isFinite(pnl) ? pnl > 0 : exitPrice > entryPrice;
+
+  const exitEvent = {
+    eventType: 'exit',
+    type: 'exit',
+    tradeId: position.tradeId || null,
+    marketId: market.conditionId || position.marketId || null,
+    question: market.question || position.question || null,
+    windowMinutes: market.windowMinutes ?? position.windowMinutes ?? null,
+    windowLabel: position.windowLabel || formatMarketWindowLabel(market),
+    direction,
+    entryTime: position.entryTime,
+    exitTime,
+    holdSeconds: position.entryTime ? Math.round((exitTime - position.entryTime) / 1000) : null,
+    entryPrice,
+    exitPrice,
+    betSize: costBasis,
+    shares,
+    costBasis,
+    exitReason: 'resolution',
+    won,
+    pnl,
+    cashBefore,
+    cashAfter,
+    exitProceeds: proceeds,
+    resolvedOutcome: outcome,
+    logLine: formatResolutionExitLog({
+      direction,
+      shares,
+      payout: proceeds,
+      pnl,
+      outcome,
+    }),
+  };
+
+  return {
+    exitEvent,
+    cashAfter,
+    realizedPnlDelta: Number.isFinite(pnl) ? pnl : 0,
+    proceeds: Number.isFinite(proceeds) ? proceeds : 0,
+  };
 }
 
 function revaluePositionRow(pos, currentPrice) {
@@ -224,7 +346,13 @@ module.exports = {
   fmtUsd,
   formatMarketWindowLabel,
   formatEntryLog,
+  formatResolutionExitLog,
   formatExitLog,
+  positionDirection,
+  positionShares,
+  positionCostBasis,
+  marketFromPosition,
+  settleAtResolution,
   revaluePositionRow,
   summarizeOpenPositions,
   calcExitProceeds,

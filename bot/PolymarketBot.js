@@ -26,12 +26,14 @@ const {
   summarizeOpenPositions,
   buildOpenPositionRow,
   formatMarketWindowLabel,
+  formatExitLog,
+  settleAtResolution,
 } = require('../paper/portfolio');
 const { getMidpoint, subscribeClobAssets, getMarketResolution } = require('../api/polymarket_runtime');
 const {
   resolveSettlementOutcome,
-  settlementExitPrice,
   isMarketPastEnd,
+  isNearResolutionPrice,
 } = require('../lib/marketResolution');
 const { isTradeLimitReached } = require('../lib/botRunConfig');
 const { resolveStopThreshold, passesEntryPriceBand } = require('../lib/botProfile');
@@ -127,7 +129,15 @@ class PolymarketBot {
     console.log(`  Session: ${this.session.modeLabel(this.sessionState)}`);
     console.log(`  Starting cash: $${this.cash}`);
     const sizingCfg = resolveSizingConfig(getActivePreset());
-    console.log(`  Sizing: ${sizingCfg.sizingMode}${sizingCfg.sizingMode === 'fixed' ? ` ($${sizingCfg.fixedBetUsd})` : ''}${sizingCfg.sizingMode === 'kelly' ? ` (cap ${(sizingCfg.kellyFractionCap * 100).toFixed(0)}%)` : ''}`);
+    const sizingDetail = sizingCfg.sizingMode === 'fixed'
+      ? ` ($${sizingCfg.fixedBetUsd})`
+      : sizingCfg.sizingMode === 'percent' || sizingCfg.sizingMode === 'amount_cap'
+        ? ` (${sizingCfg.betPercent}%)`
+        : sizingCfg.sizingMode === 'kelly'
+          ? ` (cap ${(sizingCfg.kellyFractionCap * 100).toFixed(0)}%)`
+          : '';
+    const profileTag = this.config.profileId ? ` | profile=${this.config.profileId}` : '';
+    console.log(`  Sizing: ${sizingCfg.sizingMode}${sizingDetail}${profileTag}`);
     const exitLabel = this.config.exitMode === 'fixed_price'
       ? `fixed_price @ ${this.config.exitTargetPrice}`
       : 'resolve_only (hold to resolution)';
@@ -472,7 +482,12 @@ class PolymarketBot {
     if (this.config.useWsEval) {
       this.resyncClobWs(markets);
       if (tradableMarkets.length) {
-        const watchlist = buildWatchlist(markets, this.openPositions, this.config.allowedWindows);
+        const watchlist = buildWatchlist(
+          markets,
+          this.openPositions,
+          this.config.allowedWindows,
+          this.entryRules
+        );
         await Promise.allSettled(watchlist.map((market) => this.evaluateMarket(market)));
       }
     } else if (tradableMarkets.length) {
@@ -516,7 +531,12 @@ class PolymarketBot {
   }
 
   collectWsAssetIds(markets) {
-    const watchlist = buildWatchlist(markets, this.openPositions, this.config.allowedWindows);
+    const watchlist = buildWatchlist(
+      markets,
+      this.openPositions,
+      this.config.allowedWindows,
+      this.entryRules
+    );
     const ids = new Set();
     for (const m of watchlist) {
       if (m.tokenIdYes) ids.add(m.tokenIdYes);
@@ -640,7 +660,8 @@ class PolymarketBot {
       const watchlist = buildWatchlist(
         this.cachedMarkets.length ? this.cachedMarkets : [market],
         this.openPositions,
-        this.config.allowedWindows
+        this.config.allowedWindows,
+        this.entryRules
       );
       const inWatchlist = watchlist.some((m) => m.conditionId === market.conditionId);
       const cachedYes = opts.fromWs ? this.priceBuffers.latest(market.conditionId) : null;
@@ -835,11 +856,15 @@ class PolymarketBot {
     const winRateLog = Number.isFinite(sizingResult.winRate)
       ? ` | winRate=${(sizingResult.winRate * 100).toFixed(1)}%`
       : '';
+    const profilePrefix = this.config.profileId ? `profile=${this.config.profileId} | ` : '';
+    const sizingLabel = sizingConfig.sizingMode === 'percent' || sizingConfig.sizingMode === 'amount_cap'
+      ? `${sizingConfig.sizingMode}(${sizingConfig.betPercent}%)`
+      : sizingConfig.sizingMode;
     const exitNote = exitMode === 'fixed_price' && Number.isFinite(exitTargetPrice)
       ? ` | exit=take_profit@${exitTargetPrice.toFixed(2)}`
       : ' | exit=resolve_only';
     console.log(
-      `[PositionOpen] ${marketLabel(market)} | sizing=${sizingConfig.sizingMode} | size=$${betSize.toFixed(2)} | shares=${shares.toFixed(2)} YES | entry=${fmtPrice(yesPrice)} | stop=${signal.stop.toFixed(3)}${exitNote} | depth=${liquidityDepth.toFixed(0)} | depthFetch=${depthFetchEnd - depthFetchStart}ms${winRateLog}`
+      `[PositionOpen] ${profilePrefix}${marketLabel(market)} | sizing=${sizingLabel} | size=$${betSize.toFixed(2)} | shares=${shares.toFixed(2)} YES | entry=${fmtPrice(yesPrice)} | stop=${signal.stop.toFixed(3)}${exitNote} | depth=${liquidityDepth.toFixed(0)} | depthFetch=${depthFetchEnd - depthFetchStart}ms${winRateLog}`
     );
 
     const tradeId = `${this.paperTrade ? 'paper' : 'live'}-${market.conditionId}-${++this.liveTradeSeq}`;
@@ -947,55 +972,95 @@ class PolymarketBot {
 
       const stopThreshold = resolveStopThreshold(entryPrice, this.stopProfile, signal?.stop);
       const stopActive = Number.isFinite(stopThreshold) && stopThreshold > 0;
-      const exitByStop = stopActive && currentPrice <= stopThreshold;
-      const exitByTakeProfit = exitMode === 'fixed_price'
-        && Number.isFinite(exitTargetPrice)
-        && currentPrice >= exitTargetPrice;
-      const settlementOutcome = resolveSettlementOutcome({
+      const marketExpired = isMarketPastEnd(market);
+
+      let settlementOutcome = resolveSettlementOutcome({
         gammaOutcome: resolvedOutcome,
         yesPrice: currentPrice,
         market,
-        requireExpired: true,
+        requireExpired: !isNearResolutionPrice(currentPrice),
       });
+      if (!settlementOutcome && marketExpired) {
+        try {
+          const detail = await getMarketResolution(market.conditionId, {
+            question: market.question || position.market?.question,
+            slug: market.slug || position.market?.slug,
+          });
+          if (detail?.outcome === 'Yes' || detail?.outcome === 'No') {
+            settlementOutcome = detail.outcome;
+            this.resolutionByConditionId.set(market.conditionId, detail.outcome);
+          }
+        } catch (_) {}
+      }
       const exitByResolution = settlementOutcome === 'Yes' || settlementOutcome === 'No';
+      const exitByStop = !marketExpired && !exitByResolution && stopActive && currentPrice <= stopThreshold;
+      const exitByTakeProfit = !marketExpired && !exitByResolution
+        && exitMode === 'fixed_price'
+        && Number.isFinite(exitTargetPrice)
+        && currentPrice >= exitTargetPrice;
 
       if (!exitByStop && !exitByTakeProfit && !exitByResolution) return;
 
+      const cashBefore = this.cash;
       let exitPrice = currentPrice;
       let exitReason = 'resolution';
-      if (exitByStop) {
-        exitPrice = Math.min(currentPrice, stopThreshold);
-        exitReason = 'stop_loss';
-      } else if (exitByTakeProfit) {
-        exitPrice = currentPrice;
-        exitReason = 'take_profit';
-      } else if (exitByResolution) {
-        const direction = signal?.direction || position.direction || 'YES';
-        exitPrice = settlementExitPrice(settlementOutcome, direction);
+      let pnl;
+      let proceeds;
+      let logLine;
+
+      if (exitByResolution) {
+        const settlement = settleAtResolution(position, settlementOutcome, {
+          cash: this.cash,
+          market,
+          exitTime: now,
+        });
+        if (!settlement) return;
+
+        exitPrice = settlement.exitEvent.exitPrice;
+        pnl = settlement.exitEvent.pnl;
+        proceeds = settlement.exitEvent.exitProceeds ?? settlement.proceeds;
+        logLine = settlement.exitEvent.logLine;
         exitReason = 'resolution';
         resolvedOutcome = settlementOutcome;
+        this.cash = settlement.cashAfter;
+      } else {
+        if (exitByStop) {
+          exitPrice = Math.min(currentPrice, stopThreshold);
+          exitReason = 'stop_loss';
+        } else if (exitByTakeProfit) {
+          exitPrice = currentPrice;
+          exitReason = 'take_profit';
+        }
+        pnl = calcRealizedPnl(shares, entryPrice, exitPrice, betSize);
+        proceeds = calcExitProceeds(shares, exitPrice);
+        if (Number.isFinite(proceeds)) this.cash += proceeds;
+        logLine = formatExitLog({
+          direction: signal?.direction || 'YES',
+          shares,
+          exitPrice,
+          pnl,
+          market,
+          exitReason,
+        });
       }
 
       const won = exitPrice > entryPrice;
       this.bayesianTracker.update(signal.edgeCase, won);
-      const pnl = calcRealizedPnl(shares, entryPrice, exitPrice, betSize);
-      const proceeds = calcExitProceeds(shares, exitPrice);
-      const cashBefore = this.cash;
-
-      if (Number.isFinite(proceeds)) {
-        this.cash += proceeds;
-      }
       this.realizedPnlTotal += pnl;
       const cashAfter = this.cash;
 
       delete this.openPositions[market.conditionId];
       this.syncPositionValuationLoop();
 
-      const icon = won ? '✓' : '✗';
-      console.log(
-        `[ExitTrigger] ${marketLabel(market)} | reason=${exitReason} | stop@${stopThreshold.toFixed(2)} | resolved=${resolvedOutcome || 'n/a'}`
-      );
-      console.log(`[Exit ${icon}] ${signal.direction} | shares=${shares.toFixed(2)} | exit=${fmtPrice(exitPrice)} | pnl=$${pnl.toFixed(2)} | cash=$${this.cash.toFixed(2)}`);
+      if (exitReason === 'resolution') {
+        console.log(logLine);
+      } else {
+        const icon = won ? '✓' : '✗';
+        console.log(
+          `[ExitTrigger] ${marketLabel(market)} | reason=${exitReason} | stop@${stopThreshold.toFixed(2)} | resolved=${resolvedOutcome || 'n/a'}`
+        );
+        console.log(`[Exit ${icon}] ${signal.direction} | shares=${shares.toFixed(2)} | exit=${fmtPrice(exitPrice)} | pnl=$${pnl.toFixed(2)} | cash=$${this.cash.toFixed(2)}`);
+      }
 
       emitTradeEvent({
         eventType: 'exit',
@@ -1027,6 +1092,8 @@ class PolymarketBot {
         cashBefore,
         cashAfter,
         exitProceeds: proceeds,
+        resolvedOutcome: exitReason === 'resolution' ? resolvedOutcome : null,
+        logLine,
       });
       this.syncPositionValuationLoop();
       await this.publishPortfolioUpdate();

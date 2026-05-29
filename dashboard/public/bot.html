@@ -53,6 +53,18 @@
     <section class="card-panel page-panel bot-controls-panel">
       <h2>Controls</h2>
       <div class="bot-controls-grid">
+        <label class="control-group" for="bot-profile-select">
+          <span class="control-label">Bot profile</span>
+          <select id="bot-profile-select" class="control-input"></select>
+        </label>
+        <div class="control-group">
+          <span class="control-label">Profile actions</span>
+          <div class="btn-row">
+            <button id="bot-profile-new-btn" type="button" class="btn btn-secondary">New</button>
+            <button id="bot-profile-dup-btn" type="button" class="btn btn-secondary">Duplicate</button>
+            <button id="bot-profile-del-btn" type="button" class="btn btn-secondary">Delete</button>
+          </div>
+        </div>
         <label class="control-group" for="bot-strategy-select">
           <span class="control-label">Strategy</span>
           <select id="bot-strategy-select" class="control-input"></select>
@@ -121,20 +133,65 @@
           <span class="control-label">Max trades per market</span>
           <input id="bot-max-trades-market" class="control-input" type="number" min="1" max="100" value="1" />
         </label>
+        </div>
+      </div>
+      <div class="bot-profile-section">
+        <h3 class="bot-subsection-title">Bet sizing</h3>
+        <p class="bot-profile-hint">How much USDC to risk per entry. Saved with the active profile.</p>
+        <div class="lab-segmented bot-sizing-modes" role="radiogroup" aria-label="Bet sizing mode">
+          <label class="lab-segment">
+            <input type="radio" name="bot-sizing-mode" value="kelly" />
+            <span>Kelly</span>
+          </label>
+          <label class="lab-segment">
+            <input type="radio" name="bot-sizing-mode" value="fixed" />
+            <span>Fixed</span>
+          </label>
+          <label class="lab-segment">
+            <input type="radio" name="bot-sizing-mode" value="percent" />
+            <span>Percent</span>
+          </label>
+          <label class="lab-segment">
+            <input type="radio" name="bot-sizing-mode" value="compound" checked />
+            <span>Compound</span>
+          </label>
+        </div>
+        <div class="bot-controls-grid">
+          <div id="bot-sizing-panel-fixed" class="control-group hidden">
+            <label for="bot-fixed-bet-usd">
+              <span class="control-label">Fixed bet (USDC)</span>
+              <input id="bot-fixed-bet-usd" class="control-input" type="number" min="0.5" step="0.5" value="5" />
+            </label>
+          </div>
+          <div id="bot-sizing-panel-percent" class="control-group hidden">
+            <label for="bot-bet-percent">
+              <span class="control-label">Bet % of bankroll</span>
+              <div class="bot-slider-row">
+                <input type="range" id="bot-bet-percent-slider" class="bot-range" min="1" max="100" step="1" value="25" />
+                <input id="bot-bet-percent" class="control-input bot-stop-input" type="number" min="1" max="100" step="1" value="25" />
+              </div>
+            </label>
+          </div>
+          <div id="bot-sizing-panel-kelly" class="control-group hidden">
+            <label for="bot-kelly-cap">
+              <span class="control-label">Kelly cap (%)</span>
+              <input id="bot-kelly-cap" class="control-input" type="number" min="1" max="15" step="0.5" value="8" />
+            </label>
+          </div>
+        </div>
+        <p id="bot-sizing-preview" class="bot-profile-hint" aria-live="polite"></p>
         <div class="control-group">
-          <span class="control-label">Profile</span>
           <div class="btn-row">
             <button id="bot-save-profile-btn" type="button" class="btn btn-secondary">Save profile</button>
             <a href="/lab" class="btn btn-secondary">Strategy Lab →</a>
           </div>
-        </div>
         </div>
       </div>
       <div class="bot-controls-grid bot-actions-row">
         <div class="control-group">
           <span class="control-label">Actions</span>
           <div class="btn-row">
-            <button id="bot-start-btn" type="button" class="btn btn-primary">Start bot</button>
+            <button id="bot-start-btn" type="button" class="btn btn-primary">Start bot with profile</button>
             <button id="bot-stop-btn" type="button" class="btn btn-danger">Stop bot</button>
           </div>
         </div>
@@ -189,6 +246,7 @@
   <script src="/js/layout.js"></script>
   <script src="/js/cashAdjust.js"></script>
   <script src="/js/botProfileUi.js"></script>
+  <script src="/js/sizingUi.js"></script>
   <script src="/js/pages/bot.js"></script>
 </body>
 </html>

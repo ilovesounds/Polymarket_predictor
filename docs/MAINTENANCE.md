@@ -15,9 +15,9 @@ This project ships user-facing docs at **`http://localhost:<DASHBOARD_PORT>/docs
 | `lib/` | HTTP fetch, sizing, market selection, NATS bridge, Strategy Lab presets |
 | `risk/` | Kelly sizing (`manager_runtime.js`; `manager.js` is reference/docs) |
 | `backtest/` | CLI backtest engine |
-| `feeds/` | NATS publisher for external ticks |
+| `feeds/` | Node NATS publisher (`npm run feeds:nats`); optional Rust publisher (`npm run feeds:rust` after `feeds:rust:build`) |
 | `monitoring/` | Latency metrics + trade-depth watch |
-| `data/` | Strategy Lab preset JSON |
+| `data/` | Strategy Lab presets, bot profiles, per-profile paper wallets |
 | `docs/` | This maintenance checklist (user docs are under `dashboard/public/docs/`) |
 
 ## When to update docs
@@ -33,6 +33,7 @@ Update documentation in the **same PR or commit** as the code change when you:
 | New/changed strategy | `signals/strategies_runtime.js` + docs **Strategies** table + Bot page behavior if applicable |
 | NATS subject or feed behavior | `lib/nats/subjects.js`, `rust/feeds-rs/README.md`, docs **NATS vs direct** |
 | Backtest CLI flags or defaults | `backtest/engine.js` header comment + docs **Backtest** section |
+| Bet sizing modes or profile storage | `lib/betSizing.js`, `lib/botProfilesStore.js`, `lib/paperWallet.js`, Bot + Lab UI, docs **Bet sizing** + **Named bot profiles** |
 | API endpoint (`/api/...`) | `dashboard/server.js` + docs **HTTP API** list |
 | Bot market filter / run limits | `lib/botRunConfig.js`, `bot/SessionManager.js`, `bot.js`, Bot page UI, `.env.example` |
 | Bot architecture / strategies / exit mode | `bot/Config.js`, `bot/MarketScanner.js`, `bot/StrategyRouter.js`, `bot/PolymarketBot.js`, `signals/strategies_runtime.js`, `.env.example` |

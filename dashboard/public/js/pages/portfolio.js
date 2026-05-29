@@ -13,9 +13,11 @@
   const positionsBody = document.getElementById('portfolio-positions-body');
   const tradeLog = document.getElementById('portfolio-trade-log');
   const tradeCountEl = document.getElementById('portfolio-trade-count');
+  const profileSelect = document.getElementById('portfolio-profile-select');
 
   const seenTradeKeys = new Set();
   let portfolioLoaded = false;
+  let activeProfileId = 'default';
 
   function tradeKey(entry) {
     return `${entry.tradeId || ''}:${entry.type}:${entry.timestamp}`;
@@ -105,7 +107,12 @@
     const type = entry.type || 'event';
     line.className = `line portfolio-trade ${type === 'entry' ? 'bot-entry' : type === 'exit' ? 'bot-exit' : 'bot-check'}`;
     const text = entry.logLine || entry.detail || `${type} ${entry.tradeId || ''}`.trim();
-    line.innerHTML = `<span class="trade-type">${type}</span> ${text} <span class="trade-ts">@ ${D.fmtTs(entry.timestamp)}</span>`;
+    const reasonTag = entry.exitReason === 'resolution'
+      ? ' <span class="trade-reason">resolved</span>'
+      : entry.exitReason
+        ? ` <span class="trade-reason">${String(entry.exitReason).replace(/_/g, ' ')}</span>`
+        : '';
+    line.innerHTML = `<span class="trade-type">${type}</span> ${text}${reasonTag} <span class="trade-ts">@ ${D.fmtTs(entry.timestamp)}</span>`;
     if (prepend) tradeLog.prepend(line);
     else tradeLog.appendChild(line);
   }
@@ -132,9 +139,10 @@
     }
   }
 
-  async function loadPortfolio() {
+  async function loadPortfolio(profileId = activeProfileId) {
     try {
-      const resp = await fetch('/api/portfolio').then((r) => r.json());
+      const q = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+      const resp = await fetch(`/api/portfolio${q}`).then((r) => r.json());
       D.applyPortfolioSnapshot(resp);
       renderPortfolioView(D.getPortfolio());
     } catch (_) {
@@ -142,6 +150,23 @@
       renderPositions([]);
     }
   }
+
+  async function loadProfileOptions() {
+    if (!profileSelect) return;
+    try {
+      const resp = await fetch('/api/bot/profiles').then((r) => r.json());
+      activeProfileId = resp.activeProfileId || 'default';
+      profileSelect.innerHTML = (resp.profiles || [])
+        .map((p) => `<option value="${p.id}">${p.name}</option>`)
+        .join('');
+      profileSelect.value = activeProfileId;
+    } catch (_) {}
+  }
+
+  profileSelect?.addEventListener('change', () => {
+    activeProfileId = profileSelect.value;
+    loadPortfolio(activeProfileId);
+  });
 
   D.subscribePortfolio((portfolio) => {
     renderPortfolioView(portfolio, { mergeHistory: true });
@@ -176,6 +201,7 @@
         type: msg.type,
         tradeId: msg.tradeId,
         logLine: msg.logLine || msg.detail,
+        exitReason: msg.exitReason,
         timestamp: msg.timestamp,
       }, { prepend: true });
       if (tradeCountEl) {
@@ -188,7 +214,7 @@
     }
   });
 
-  loadPortfolio();
+  loadProfileOptions().then(() => loadPortfolio(activeProfileId));
 
   window.DashboardCashAdjust?.wire({
     amountInputId: 'portfolio-cash-amount',

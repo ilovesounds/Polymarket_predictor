@@ -621,6 +621,7 @@ function recordRestLatency(streamKey, startedAt, meta) {
 async function getMidpoint(tokenId) {
   const startedAt = Date.now();
   const res = await fetchClob(`${CLOB}/midpoint?token_id=${tokenId}`);
+  if (!res.ok) throw new Error(`CLOB midpoint HTTP ${res.status}`);
   const data = await res.json();
   recordRestLatency('poly_midpoint_rest', startedAt, { tokenId: String(tokenId).slice(0, 12) });
   return parseFloat(data.mid);
@@ -639,6 +640,7 @@ async function getOrderBook(tokenId) {
 
   const startedAt = Date.now();
   const res = await fetchClob(`${CLOB}/book?token_id=${id}`);
+  if (!res.ok) throw new Error(`CLOB book HTTP ${res.status}`);
   const data = await res.json();
   recordRestLatency('poly_orderbook_rest', startedAt, { tokenId: id.slice(0, 12) });
   const book = {

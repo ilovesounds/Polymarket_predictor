@@ -17,6 +17,13 @@ const {
   getPriceHistory1Min,
 } = require('../api/polymarket_runtime');
 const { emitTradeEvent } = require('../logging/tradeEvents');
+const {
+  calcShares,
+  calcRealizedPnl,
+  calcExitProceeds,
+  settleAtResolution,
+} = require('../paper/portfolio');
+const { settlementExitPrice } = require('../lib/marketResolution');
 
 const POLYBACKTEST_API = 'https://polybacktest.com/api/v1';
 const STARTING_BANKROLL = 5;
@@ -182,7 +189,7 @@ function simulateWindow(candles, windowMeta, bankroll, recentResolutions) {
     0,
     Math.round(windowSeconds - ((entryCandle.t - candles[0].t) / 1000))
   );
-  let exitPrice  = resolved === 'Yes' ? 1.0 : 0.0;
+  let exitPrice = settlementExitPrice(resolved, 'YES');
   let exitReason = 'resolution';
   let exitTime = candles[candles.length - 1].t;
 
@@ -196,11 +203,25 @@ function simulateWindow(candles, windowMeta, bankroll, recentResolutions) {
     }
   }
 
-  const won = exitPrice > entryPrice;
   const betSize  = bankroll;
-  const pnl      = betSize * ((exitPrice - entryPrice) / entryPrice);
+  const shares = calcShares(betSize, entryPrice);
+  let pnl;
+  let bankrollAfter;
+  if (exitReason === 'resolution') {
+    const settlement = settleAtResolution(
+      { entryPrice, betSize, shares, costBasis: betSize, signal: { direction: 'YES' } },
+      resolved,
+      { cash: 0 }
+    );
+    pnl = settlement?.realizedPnlDelta ?? calcRealizedPnl(shares, entryPrice, exitPrice, betSize);
+    const proceeds = settlement?.proceeds ?? calcExitProceeds(shares, exitPrice);
+    bankrollAfter = Math.max(0, bankroll + (Number.isFinite(proceeds) ? proceeds - betSize : pnl));
+  } else {
+    pnl = calcRealizedPnl(shares, entryPrice, exitPrice, betSize);
+    bankrollAfter = Math.max(0, bankroll + pnl);
+  }
+  const won = exitPrice > entryPrice;
   const holdSeconds = Math.max(0, Math.round((exitTime - entryTime) / 1000));
-  const bankrollAfter = Math.max(0, bankroll + pnl);
   const tradeId = `bt-${windowMeta.conditionId || 'unknown'}-${entryTime}`;
   const strategySignal = {
     edgeCase: 'YES_GE_0_50',

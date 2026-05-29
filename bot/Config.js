@@ -55,7 +55,19 @@ function loadConfig(env = process.env) {
   const legacyStrategy = normalizeStrategyId(env.BOT_STRATEGY || 'deterministic_yes_50');
   const exitConfig = resolveExitConfig(env);
   const envStartingCash = parseFloat(env.STARTING_CASH || env.STARTING_BANKROLL || '20');
-  const cashFromFile = resolvePortfolioCashFromAdjustments(envStartingCash);
+  const profileId = env.BOT_PROFILE_ID || env.PAPER_WALLET_PROFILE || null;
+  let cashFromFile;
+  if (profileId) {
+    const { loadPaperWallet } = require('../lib/paperWallet');
+    const wallet = loadPaperWallet(profileId, envStartingCash);
+    cashFromFile = {
+      cash: wallet.cash,
+      startingCash: wallet.startingCash,
+      netCashDelta: wallet.netCashDelta ?? 0,
+    };
+  } else {
+    cashFromFile = resolvePortfolioCashFromAdjustments(envStartingCash);
+  }
 
   const parseOptFloat = (raw) => {
     if (raw == null || raw === '') return null;
@@ -105,6 +117,7 @@ function loadConfig(env = process.env) {
     gammaCacheMs: Number(env.BOT_GAMMA_CACHE_MS || env.GAMMA_CACHE_MS || 40_000),
     exitMode: exitConfig.exitMode,
     exitTargetPrice: exitConfig.exitTargetPrice,
+    profileId: profileId || null,
   };
 }
 

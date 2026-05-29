@@ -157,6 +157,10 @@
                 <span>Fixed</span>
               </label>
               <label class="lab-segment">
+                <input type="radio" name="sizing-mode" value="percent" />
+                <span>Percent</span>
+              </label>
+              <label class="lab-segment">
                 <input type="radio" name="sizing-mode" value="compound" checked />
                 <span>Compound</span>
               </label>
@@ -165,6 +169,16 @@
               <label class="lab-field">
                 <span>Fixed bet (USDC)</span>
                 <input type="number" id="fixed-bet-usd" class="control-input" min="0.5" step="0.5" value="5" />
+              </label>
+            </div>
+            <div id="sizing-panel-percent" class="lab-sizing-panel hidden">
+              <label class="lab-field">
+                <span>Bet % of bankroll <output id="out-bet-percent" for="bet-percent">25</output>%</span>
+                <input type="range" id="bet-percent" min="1" max="100" step="1" value="25" />
+              </label>
+              <label class="lab-field">
+                <span>Or enter %</span>
+                <input type="number" id="bet-percent-input" class="control-input" min="1" max="100" step="1" value="25" />
               </label>
             </div>
             <div id="sizing-panel-kelly" class="lab-sizing-panel hidden">
@@ -177,6 +191,7 @@
             <div id="sizing-panel-compound" class="lab-sizing-panel">
               <p class="lab-lead lab-sizing-note">Uses <strong>100% of current bankroll</strong> each trade (initial + accumulated wins/losses).</p>
             </div>
+            <p id="lab-sizing-preview" class="lab-lead lab-sizing-preview" aria-live="polite"></p>
           </fieldset>
 
           <div class="lab-form-actions">
@@ -211,6 +226,7 @@
   <script src="/js/core.js"></script>
   <script src="/js/layout.js"></script>
   <script src="/js/botProfileUi.js"></script>
+  <script src="/js/sizingUi.js"></script>
   <script src="/js/pages/lab.js"></script>
 </body>
 </html>

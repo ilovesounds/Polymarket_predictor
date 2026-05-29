@@ -1,0 +1,17 @@
+{
+  "strategyId": "conservative_yes_55",
+  "marketWindow": "5m",
+  "runLimit": {
+    "mode": "unlimited",
+    "tradeCount": null
+  },
+  "stopLossPct": 10,
+  "stopLossPrice": null,
+  "stopThreshold": 0.45,
+  "entryMinSeconds": 45,
+  "entryMaxSeconds": null,
+  "entryMinPrice": null,
+  "entryMaxPrice": null,
+  "maxTradesPerMarket": 5,
+  "updatedAt": 1780058290813
+}

@@ -1,0 +1,17 @@
+{
+  "maxSpreadCents": 5,
+  "minDepthUsd": 1000,
+  "minVolume24h": 0,
+  "maxImbalanceAbs": 0.8,
+  "maxSlippagePct": 2,
+  "maxPositionPctOfLiquidity": 5,
+  "ticksFromMid": 3,
+  "gateMode": "warn",
+  "sizingMode": "compound",
+  "fixedBetUsd": 20,
+  "kellyFractionCap": 0.08,
+  "defaultWinRate": 0.55,
+  "id": "env-default",
+  "name": "Environment defaults",
+  "appliedAt": 1780057234102
+}

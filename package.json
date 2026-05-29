@@ -8,6 +8,8 @@
     "dashboard:nats": "USE_NATS=true USE_NATS_FEEDS=true node dashboard/server.js",
     "latency:probe": "node monitoring/latencyProbe.js",
     "feeds:nats": "node feeds/natsPublisher.js",
+    "feeds:rust:build": "cargo build --release --manifest-path rust/feeds-rs/Cargo.toml",
+    "feeds:rust": "rust/feeds-rs/target/release/feeds-rs",
     "paper:live": "PAPER_TRADE=true ENABLE_DASHBOARD_FEED=true node bot.js",
     "backtest": "node backtest/engine.js",
     "backtest:5m": "MARKET_WINDOW=5 node backtest/engine.js",
