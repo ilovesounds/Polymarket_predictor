@@ -1,0 +1,258 @@
+/* Apple-inspired light latency dashboard */
+
+.latency-page {
+  --latency-bg: #f5f5f7;
+  --latency-surface: #ffffff;
+  --latency-text: #1d1d1f;
+  --latency-muted: #86868b;
+  --latency-border: rgba(0, 0, 0, 0.06);
+  --latency-accent: #0071e3;
+  --latency-good: #34c759;
+  --latency-warn: #ff9500;
+  --latency-bad: #ff3b30;
+  --font-latency: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Inter', system-ui, sans-serif;
+  background: var(--latency-bg);
+  color: var(--latency-text);
+  font-family: var(--font-latency);
+}
+
+.latency-page .app-header {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom-color: var(--latency-border);
+}
+
+.latency-page .brand h1,
+.latency-page .brand-sub,
+.latency-page .app-nav a {
+  color: var(--latency-text);
+}
+
+.latency-page .brand-sub {
+  color: var(--latency-muted);
+}
+
+.latency-page .app-nav a {
+  color: var(--latency-muted);
+}
+
+.latency-page .app-nav a:hover,
+.latency-page .app-nav a.active {
+  color: var(--latency-text);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.latency-main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+.latency-hero {
+  margin-bottom: 2.5rem;
+}
+
+.latency-hero h2 {
+  margin: 0 0 0.5rem;
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.latency-lead {
+  margin: 0;
+  color: var(--latency-muted);
+  font-size: 1.05rem;
+  max-width: 42rem;
+  line-height: 1.5;
+}
+
+.latency-updated {
+  font-size: 0.82rem;
+  color: var(--latency-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.latency-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.latency-card {
+  background: var(--latency-surface);
+  border: 1px solid var(--latency-border);
+  border-radius: 18px;
+  padding: 1.5rem 1.35rem;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.04);
+}
+
+.latency-card-wide {
+  margin-top: 0.25rem;
+}
+
+.latency-card h3 {
+  margin: 0 0 1.25rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--latency-muted);
+}
+
+.latency-card-head {
+  margin-bottom: 1.25rem;
+}
+
+.latency-card-desc {
+  margin: 0.35rem 0 0;
+  color: var(--latency-muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.latency-card-desc code {
+  font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.metric-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 1rem;
+  align-items: baseline;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--latency-border);
+}
+
+.metric-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.metric-label {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--latency-text);
+}
+
+.metric-sublabel {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  color: var(--latency-muted);
+}
+
+.metric-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.metric-stats {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  font-size: 0.78rem;
+  color: var(--latency-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-stats span strong {
+  color: var(--latency-text);
+  font-weight: 500;
+}
+
+.latency-good { color: var(--latency-good); }
+.latency-warn { color: var(--latency-warn); }
+.latency-bad { color: var(--latency-bad); }
+
+.trade-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.trade-stat {
+  background: #fafafa;
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+}
+
+.trade-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--latency-muted);
+  margin-bottom: 0.35rem;
+}
+
+.trade-stat-value {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-events {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.trade-event {
+  border: 1px solid var(--latency-border);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  background: #fafafa;
+}
+
+.trade-event-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.82rem;
+  color: var(--latency-muted);
+  margin-bottom: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.trade-event-body {
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.trade-event-body strong {
+  font-weight: 600;
+}
+
+.trade-poll-list {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--latency-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-empty {
+  color: var(--latency-muted);
+  font-size: 0.92rem;
+  padding: 0.5rem 0;
+}
+
+@media (max-width: 640px) {
+  .latency-main { padding: 1.5rem 1rem 3rem; }
+  .latency-hero h2 { font-size: 1.5rem; }
+  .metric-value { font-size: 1.15rem; }
+}

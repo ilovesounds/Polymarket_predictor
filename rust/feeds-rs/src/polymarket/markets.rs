@@ -27,11 +27,38 @@ fn is_btc_related(text: &str) -> bool {
 
 pub fn detect_window_minutes(text: &str) -> Option<u32> {
     let t = text.to_lowercase();
+    if t.contains("btc-updown-1d") {
+        return Some(crate::config::WINDOW_1D_MINUTES);
+    }
     if t.contains("btc-updown-15m") {
         return Some(15);
     }
     if t.contains("btc-updown-5m") {
         return Some(5);
+    }
+    if t.contains("bitcoin-up-or-down-on-") || t.contains("btc-updown-daily") {
+        return Some(crate::config::WINDOW_1D_MINUTES);
+    }
+    if t.contains("up or down on jan")
+        || t.contains("up or down on feb")
+        || t.contains("up or down on mar")
+        || t.contains("up or down on apr")
+        || t.contains("up or down on may")
+        || t.contains("up or down on jun")
+        || t.contains("up or down on jul")
+        || t.contains("up or down on aug")
+        || t.contains("up or down on sep")
+        || t.contains("up or down on oct")
+        || t.contains("up or down on nov")
+        || t.contains("up or down on dec")
+    {
+        return Some(crate::config::WINDOW_1D_MINUTES);
+    }
+    if (t.contains("1 day") || t.contains("1d") || t.contains("daily"))
+        && (t.contains("btc") || t.contains("bitcoin"))
+        && (t.contains("up or down") || t.contains("updown"))
+    {
+        return Some(crate::config::WINDOW_1D_MINUTES);
     }
     if t.contains("15m")
         || t.contains("15-minute")
@@ -142,25 +169,50 @@ pub fn dedupe_markets(markets: Vec<BtcMarket>) -> Vec<BtcMarket> {
     out
 }
 
+fn horizon_ms_for_window(window_minutes: u32) -> i64 {
+    (window_minutes as i64) * 60_000 + 90_000
+}
+
 pub fn select_nearest_relevant_markets(markets: Vec<BtcMarket>, allowed: &[u32]) -> Vec<BtcMarket> {
     let now = now_ms() as i64;
-    let max_window = allowed.iter().copied().max().unwrap_or(15);
-    let horizon_ms = (max_window as i64) * 60_000 + 90_000;
 
-    let mut live: Vec<BtcMarket> = markets
+    let live: Vec<BtcMarket> = markets
         .into_iter()
         .filter(|m| m.end_time_ms > now && allowed.contains(&m.window_minutes))
         .collect();
-    live.sort_by_key(|m| m.end_time_ms);
 
-    let relevant: Vec<BtcMarket> = live
+    if allowed.len() > 1 {
+        let per_window = std::cmp::max(2, (8 + allowed.len() as usize - 1) / allowed.len());
+        let mut picked = Vec::new();
+        for &w in allowed {
+            let horizon_ms = horizon_ms_for_window(w);
+            let mut bucket: Vec<BtcMarket> = live
+                .iter()
+                .filter(|m| m.window_minutes == w && (m.end_time_ms - now) <= horizon_ms)
+                .cloned()
+                .collect();
+            bucket.sort_by_key(|m| m.end_time_ms);
+            picked.extend(bucket.into_iter().take(per_window));
+        }
+        if !picked.is_empty() {
+            picked.sort_by_key(|m| m.end_time_ms);
+            return picked.into_iter().take(8).collect();
+        }
+    }
+
+    let max_window = allowed.iter().copied().max().unwrap_or(15);
+    let horizon_ms = horizon_ms_for_window(max_window);
+    let mut sorted = live;
+    sorted.sort_by_key(|m| m.end_time_ms);
+
+    let relevant: Vec<BtcMarket> = sorted
         .iter()
         .filter(|m| (m.end_time_ms - now) <= horizon_ms)
         .cloned()
         .collect();
 
     let picked = if relevant.is_empty() {
-        live.into_iter().take(8).collect()
+        sorted.into_iter().take(8).collect()
     } else {
         relevant
     };
@@ -195,11 +247,18 @@ struct SearchEvent {
     markets: Option<Vec<Value>>,
 }
 
-const SEARCH_QUERIES: &[&str] = &[
-    "bitcoin up or down",
-    "btc-updown-5m",
-    "btc-updown-15m",
-];
+fn search_queries(allowed: &[u32]) -> Vec<&'static str> {
+    let mut queries = vec![
+        "bitcoin up or down",
+        "btc-updown-5m",
+        "btc-updown-15m",
+    ];
+    if allowed.contains(&crate::config::WINDOW_1D_MINUTES) {
+        queries.push("bitcoin up or down on");
+        queries.push("btc-updown-1d");
+    }
+    queries
+}
 
 pub async fn fetch_active_btc_markets(cfg: &Config) -> Result<Vec<BtcMarket>> {
     let allowed = allowed_windows(cfg);
@@ -208,7 +267,7 @@ pub async fn fetch_active_btc_markets(cfg: &Config) -> Result<Vec<BtcMarket>> {
         .build()?;
 
     let mut combined = Vec::new();
-    for query in SEARCH_QUERIES {
+    for query in search_queries(&allowed) {
         combined.extend(fetch_from_search(&client, cfg, &allowed, query).await?);
     }
     combined.extend(fetch_from_crypto_tag(&client, cfg, &allowed).await?);

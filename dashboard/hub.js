@@ -44,8 +44,6 @@ function publishDashboardEvent(event) {
   }
 
   if (process.env.ENABLE_DASHBOARD_FEED === 'false') return;
-  // Dashboard bridge ingests bot.events over NATS; HTTP would duplicate UI updates.
-  if (USE_NATS) return;
 
   fetch(`${DASHBOARD_URL}/api/bot-event`, {
     method: 'POST',

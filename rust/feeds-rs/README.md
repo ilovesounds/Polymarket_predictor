@@ -1,6 +1,6 @@
 # feeds-rs
 
-Low-latency market data publisher for **polymarket_bot**. Streams Binance `aggTrade` and Polymarket BTC 5m/15m up/down markets, normalizes events, and publishes JSON to NATS.
+Low-latency market data publisher for **polymarket_bot**. Streams Binance `aggTrade` and Polymarket BTC 5m/15m/1d up/down markets, normalizes events, and publishes JSON to NATS.
 
 ## Build
 
@@ -23,7 +23,7 @@ Run the feed service:
 
 ```bash
 export NATS_URL=nats://127.0.0.1:4222
-export MARKET_WINDOW=15   # 5 | 15 | both
+export MARKET_WINDOW=15   # 5 | 15 | 1d | both | all
 ./target/release/feeds-rs
 ```
 
@@ -32,7 +32,7 @@ Optional env (see project `.env.example`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `NATS_URL` | `nats://127.0.0.1:4222` | NATS server |
-| `MARKET_WINDOW` | `15` | `5`, `15`, or `both` |
+| `MARKET_WINDOW` | `15` | `5`, `15`, `1d`, `both` (5+15), or `all` (5+15+1d) |
 | `BINANCE_WS_URL` | Binance BTC aggTrade | Override WS URL |
 | `ORDERBOOK_POLL_MS` | `1000` | REST orderbook poll (vs Node dashboard `2500`) |
 | `MIDPOINT_FALLBACK_MS` | `5000` | REST midpoint backup |
@@ -110,7 +110,7 @@ Example Polymarket price:
 ```
 
 - **Hot path**: WebSocket receive loops parse minimal JSON and publish immediately (no orderbook fetch on every tick).
-- **Market filter**: Mirrors `api/polymarket_runtime.js` — BTC 5m/15m only, nearest live expiry windows.
+- **Market filter**: Mirrors `api/polymarket_runtime.js` — BTC 5m/15m/1d only, nearest live expiry windows.
 - **Orderbook**: Parallel REST polls on a fixed interval (default 1s), not coupled to price WS.
 
 ## Latency vs Node dashboard
@@ -128,6 +128,6 @@ Expect **~1–5 ms** parse/publish overhead in Rust vs **tens of ms** under Node
 
 - Polymarket **orderbook** snapshots use REST; CLOB market WS can emit book/price deltas (parsed when present).
 - Default WS is `wss://ws-subscriptions-clob.polymarket.com/ws/market` (the legacy `ws-live-data` URL returns 403).
-- No Chainlink oracle feed in this crate (still in Node `api/feeds.js`).
+- No Chainlink oracle feed in this crate (still in Node `api/feeds_runtime.js`).
 - Requires a running NATS server; Node bot/dashboard unchanged until wired to subscribe.
 - Gamma/CLOB rate limits apply; reduce `MAX_POLY_MARKETS` if needed.

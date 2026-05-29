@@ -6,6 +6,7 @@
   "scripts": {
     "dashboard": "node dashboard/server.js",
     "dashboard:nats": "USE_NATS=true USE_NATS_FEEDS=true node dashboard/server.js",
+    "latency:probe": "node monitoring/latencyProbe.js",
     "feeds:nats": "node feeds/natsPublisher.js",
     "paper:live": "PAPER_TRADE=true ENABLE_DASHBOARD_FEED=true node bot.js",
     "backtest": "node backtest/engine.js",
@@ -24,6 +25,7 @@
   "dependencies": {
     "ethers": "^5.8.0",
     "nats": "^2.29.3",
+    "undici": "^7.16.0",
     "ws": "^8.21.0"
   }
 }

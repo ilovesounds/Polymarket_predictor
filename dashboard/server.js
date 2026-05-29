@@ -20,19 +20,67 @@ const {
 } = require('../api/feeds_runtime');
 const {
   getActiveBTCShortMarkets,
+  listLiveBTCMarketsForWindow,
+  getMarketDetails,
   subscribeClobAssets,
   pairYesNoPrices,
   getMidpoint,
   getOrderBook,
   parseWindowStartMs,
 } = require('../api/polymarket_runtime');
+const { computeAllMarketParams } = require('../signals/marketParams');
 const { hub } = require('./hub');
+const { buildLabParamsPayload, getLastLabParams } = require('./labParams');
+const {
+  listPresets,
+  savePreset,
+  getActivePreset,
+  setActivePreset,
+  defaultPresetFields,
+} = require('../lib/strategyLab');
+const { sizingSnapshot, resolveSizingConfig } = require('../lib/betSizing');
 const { listStrategies, normalizeStrategyId } = require('../signals/strategies_runtime');
 const { createNatsBridge } = require('../lib/natsBridge');
 const { SUBJECTS } = require('../lib/nats/subjects');
 const { toDashboardWire, botStatus, botControl, polymarketTrade } = require('../lib/nats/schemas');
+const {
+  recordStreamLatency,
+  recordTradeDepthPipeline,
+  ingestTradePoll,
+  getSnapshot,
+  onSnapshot,
+} = require('../monitoring/latency');
+const {
+  normalizePolyMode,
+  modeToWindows,
+  windowMinutesToMode,
+  filterLiveMarketsForMode,
+  pickPrimaryLiveMarket,
+  primaryNeedsRoll,
+  isMarketLive,
+} = require('../lib/marketSelection');
+const {
+  revaluePositionRow,
+} = require('../paper/portfolio');
+const { closeResolvedPositions } = require('../lib/closeResolvedPositions');
+const { getRecentResolvedMarkets } = require('../api/polymarket_runtime');
+const { normalizeRunLimit } = require('../lib/botRunConfig');
+const {
+  loadBotProfile,
+  saveBotProfile,
+  profileToEnv,
+  normalizeBotProfile,
+} = require('../lib/botProfile');
+const {
+  appendCashAdjustment,
+  resolvePortfolioCashFromAdjustments,
+} = require('../lib/cashAdjustments');
 
 const PORT = Number(process.env.DASHBOARD_PORT || 3847);
+const STARTING_CASH = Number.parseFloat(
+  process.env.STARTING_CASH || process.env.STARTING_BANKROLL || '20'
+);
+const PORTFOLIO_TRADE_HISTORY_MAX = 500;
 const USE_NATS = process.env.USE_NATS !== 'false' && process.env.NATS_URL !== 'disabled';
 const USE_NATS_FEEDS = USE_NATS && process.env.USE_NATS_FEEDS === 'true';
 const DEBUG_POLY_STREAM = process.env.DEBUG_POLY_STREAM === 'true';
@@ -40,24 +88,32 @@ const NATS_FEED_FALLBACK_MS = Number(process.env.NATS_FEED_FALLBACK_MS || 12_000
 const NATS_CONNECT_TIMEOUT_MS = Number(process.env.NATS_CONNECT_TIMEOUT_MS || 8_000);
 const POLY_WS_THROTTLE_MS = Number(process.env.POLY_WS_THROTTLE_MS || 250);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const MARKET_REFRESH_MS = 45_000;
+const MARKET_REFRESH_MS = Number(process.env.MARKET_REFRESH_MS || 45_000);
+const MARKET_ROLL_CHECK_MS = Number(process.env.MARKET_ROLL_CHECK_MS || 5_000);
 const MIDPOINT_FALLBACK_MS = 5_000;
 const ORDERBOOK_POLL_MS = 2_500;
 const BOT_STOP_TIMEOUT_MS = 6_000;
 const ROOT_DIR = path.join(__dirname, '..');
 
 const clients = new Set();
+/** @type {Set<import('http').ServerResponse>} */
+const sseClients = new Set();
 const polySubscriptions = new Map(); // key: conditionId:yes|no
 
 let binanceConnected = false;
 let polymarketConnected = false;
-let selectedPolyMode = String(process.env.DASHBOARD_POLY_MODE || process.env.MARKET_WINDOW || '15');
+let selectedPolyMode = String(process.env.DASHBOARD_POLY_MODE || '15m');
+let selectedPrimaryMarketId = null;
 let lastMarkets = [];
+let lastMarketDetails = null;
 let polySubscriptionCycle = 0;
 let botProcess = null;
 let botStopPromise = null;
 let botLifecycle = Promise.resolve();
-let selectedStrategy = normalizeStrategyId(process.env.BOT_STRATEGY || 'deterministic_yes_50');
+const botProfile = loadBotProfile(process.env);
+let selectedStrategy = botProfile.strategyId;
+let selectedBotMarketWindow = botProfile.marketWindow;
+let botRunLimit = { ...botProfile.runLimit };
 let orderbookPollingTimer = null;
 const strategyOptions = listStrategies();
 let natsBridge = null;
@@ -80,6 +136,8 @@ let lastPolyVia = null;
 let polyStreamStats = { ws: 0, midpoint: 0, orderbook: 0, trades: 0, lastAt: 0 };
 const recentTradeKeys = new Set();
 const RECENT_TRADE_KEY_MAX = 500;
+const recentBotEventKeys = new Set();
+const RECENT_BOT_EVENT_KEY_MAX = 1000;
 let lastPolyWsEmitAt = 0;
 /** @type {Map<string, { priceToBeat: number, windowStartTime: number, priceToBeatSource: string }>} */
 const priceToBeatCache = new Map();
@@ -88,27 +146,393 @@ const botState = {
   running: false,
   pid: null,
   mode: 'paper',
-  bankroll: Number.parseFloat(process.env.STARTING_BANKROLL || '5'),
+  cash: initialCashState.cash,
   startedAt: null,
   stoppedAt: null,
   lastExitCode: null,
   logs: [],
 };
 
-function normalizePolyMode(mode) {
-  const v = String(mode || '').trim().toLowerCase();
-  if (v === '5' || v === '5m') return '5m';
-  if (v === '15' || v === '15m') return '15m';
-  if (v === 'both' || v === 'all' || v === '5,15' || v === '15,5') return 'both';
-  return '15m';
+const initialCashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
+const portfolioState = {
+  mode: 'paper',
+  cash: initialCashState.cash,
+  startingCash: initialCashState.startingCash,
+  netCashDelta: initialCashState.netCashDelta,
+  realizedPnlTotal: 0,
+  openPositions: [],
+  tradeHistory: [],
+  updatedAt: null,
+};
+
+function resolveCashFromBody(body) {
+  if (Number.isFinite(body.cash)) return body.cash;
+  if (Number.isFinite(body.bankroll)) return body.bankroll;
+  return null;
 }
+
+function resolveStartingCashFromBody(body) {
+  if (Number.isFinite(body.startingCash)) return body.startingCash;
+  if (Number.isFinite(body.startingBankroll)) return body.startingBankroll;
+  return null;
+}
+
+/** Latest YES mid per market — used to mark open bot positions between snapshots. */
+const marketYesPriceCache = new Map();
 
 selectedPolyMode = normalizePolyMode(selectedPolyMode);
 
-function modeToWindows(mode) {
-  if (mode === '5m') return [5];
-  if (mode === '15m') return [15];
-  return [5, 15];
+function rememberMarketYesPrice(marketId, yesPrice) {
+  if (!marketId || !Number.isFinite(yesPrice)) return;
+  marketYesPriceCache.set(marketId, { price: yesPrice, ts: Date.now() });
+}
+
+function cacheYesPricesFromPositions(positions = []) {
+  for (const pos of positions) {
+    if (pos.marketId && Number.isFinite(pos.currentPrice)) {
+      rememberMarketYesPrice(pos.marketId, pos.currentPrice);
+    }
+  }
+}
+
+function revalueOpenPositionsFromCache() {
+  const positions = portfolioState.openPositions || [];
+  if (!positions.length) return false;
+  let changed = false;
+  const next = positions.map((pos) => {
+    const cached = pos.marketId ? marketYesPriceCache.get(pos.marketId) : null;
+    if (!cached || !Number.isFinite(cached.price)) return pos;
+    const row = revaluePositionRow(pos, cached.price);
+    if (row.currentPrice !== pos.currentPrice || row.unrealizedPnl !== pos.unrealizedPnl) {
+      changed = true;
+    }
+    return row;
+  });
+  if (changed) portfolioState.openPositions = next;
+  return changed;
+}
+
+function mergeEntryOpenPosition(row, body) {
+  const existing = portfolioState.openPositions.find((pos) =>
+    (body.tradeId && pos.tradeId === body.tradeId)
+    || (body.marketId && pos.marketId === body.marketId)
+  );
+  if (!existing) return row;
+  const entryPrice = row.entryPrice ?? existing.entryPrice;
+  const bodyMark = Number.isFinite(row.currentPrice) && Number.isFinite(entryPrice)
+    && row.currentPrice === entryPrice;
+  const liveExisting = Number.isFinite(existing.currentPrice)
+    && Number.isFinite(existing.entryPrice)
+    && existing.currentPrice !== existing.entryPrice;
+  if (!bodyMark || !liveExisting) return { ...existing, ...row };
+  return {
+    ...existing,
+    ...row,
+    currentPrice: existing.currentPrice,
+    currentValue: existing.currentValue,
+    unrealizedPnl: existing.unrealizedPnl,
+  };
+}
+
+function portfolioSnapshot() {
+  revalueOpenPositionsFromCache();
+  const openPositions = portfolioState.openPositions || [];
+  let openPositionValue = 0;
+  let totalUnrealizedPnl = 0;
+  for (const pos of openPositions) {
+    if (Number.isFinite(pos.currentValue)) openPositionValue += pos.currentValue;
+    if (Number.isFinite(pos.unrealizedPnl)) totalUnrealizedPnl += pos.unrealizedPnl;
+  }
+  const cash = portfolioState.cash;
+  const startingCash = portfolioState.startingCash;
+  const portfolio = cash + openPositionValue;
+  const roiPct = Number.isFinite(startingCash) && startingCash > 0
+    ? ((portfolio - startingCash) / startingCash) * 100
+    : null;
+
+  return {
+    mode: portfolioState.mode,
+    cash,
+    startingCash,
+    netCashDelta: portfolioState.netCashDelta ?? 0,
+    envStartingCash: STARTING_CASH,
+    portfolio,
+    realizedPnlTotal: portfolioState.realizedPnlTotal,
+    openPositions,
+    openPositionCount: openPositions.length,
+    openPositionValue,
+    totalUnrealizedPnl,
+    totalEquity: portfolio,
+    roiPct,
+    tradeHistory: portfolioState.tradeHistory,
+    updatedAt: portfolioState.updatedAt,
+    bot: {
+      running: botState.running,
+      mode: botState.mode,
+      strategyId: selectedStrategy,
+    },
+  };
+}
+
+function rememberTradeHistory(entry) {
+  const key = `${entry.tradeId || ''}:${entry.type}:${entry.timestamp}`;
+  if (key !== '::' && portfolioState.tradeHistory.some((row) =>
+    `${row.tradeId || ''}:${row.type}:${row.timestamp}` === key
+  )) {
+    return;
+  }
+  portfolioState.tradeHistory.unshift(entry);
+  if (portfolioState.tradeHistory.length > PORTFOLIO_TRADE_HISTORY_MAX) {
+    portfolioState.tradeHistory.length = PORTFOLIO_TRADE_HISTORY_MAX;
+  }
+}
+
+function botEventDedupeKey(body = {}) {
+  const eventType = body.type || body.eventType;
+  if (eventType === 'entry' || eventType === 'exit') {
+    return `${eventType}:${body.tradeId || ''}:${body.timestamp || body.ts || ''}`;
+  }
+  return null;
+}
+
+function rememberBotEventKey(key) {
+  if (!key) return false;
+  if (recentBotEventKeys.has(key)) return true;
+  recentBotEventKeys.add(key);
+  if (recentBotEventKeys.size > RECENT_BOT_EVENT_KEY_MAX) {
+    const drop = recentBotEventKeys.size - RECENT_BOT_EVENT_KEY_MAX;
+    let i = 0;
+    for (const k of recentBotEventKeys) {
+      recentBotEventKeys.delete(k);
+      if (++i >= drop) break;
+    }
+  }
+  return false;
+}
+
+function applyPortfolioEvent(body = {}) {
+  if (body.mode === 'paper' || body.mode === 'live') portfolioState.mode = body.mode;
+  const cash = resolveCashFromBody(body);
+  if (Number.isFinite(cash)) {
+    portfolioState.cash = cash;
+    botState.cash = cash;
+  }
+  const startingCash = resolveStartingCashFromBody(body);
+  if (Number.isFinite(startingCash)) portfolioState.startingCash = startingCash;
+  if (Number.isFinite(body.realizedPnlTotal)) portfolioState.realizedPnlTotal = body.realizedPnlTotal;
+  if (Array.isArray(body.openPositions)) {
+    portfolioState.openPositions = body.openPositions;
+    cacheYesPricesFromPositions(body.openPositions);
+  }
+  portfolioState.updatedAt = body.timestamp || Date.now();
+
+  const eventType = body.type || body.eventType;
+  if (eventType === 'entry') {
+    const row = mergeEntryOpenPosition({
+      tradeId: body.tradeId || null,
+      marketId: body.marketId || null,
+      question: body.question || null,
+      windowMinutes: body.windowMinutes ?? null,
+      windowLabel: body.windowLabel || null,
+      side: body.direction || 'YES',
+      shares: body.shares ?? null,
+      entryPrice: body.entryPrice ?? null,
+      costBasis: body.costBasis ?? body.betSize ?? null,
+      currentPrice: body.currentPrice ?? body.entryPrice ?? null,
+      currentValue: body.currentValue ?? body.betSize ?? null,
+      unrealizedPnl: Number.isFinite(body.unrealizedPnl) ? body.unrealizedPnl : 0,
+      entryTime: body.entryTime || body.timestamp || Date.now(),
+    }, body);
+    if (row.marketId && Number.isFinite(row.currentPrice)) {
+      rememberMarketYesPrice(row.marketId, row.currentPrice);
+    }
+    portfolioState.openPositions = [
+      row,
+      ...portfolioState.openPositions.filter((pos) =>
+        !(body.tradeId && pos.tradeId === body.tradeId)
+        && !(body.marketId && pos.marketId === body.marketId)
+      ),
+    ];
+    const cashAfterEntry = Number.isFinite(body.cashAfter) ? body.cashAfter : body.bankrollAfter;
+    if (Number.isFinite(cashAfterEntry)) {
+      portfolioState.cash = cashAfterEntry;
+      botState.cash = cashAfterEntry;
+    }
+  }
+  if (eventType === 'exit') {
+    if (Number.isFinite(body.pnl)) {
+      portfolioState.realizedPnlTotal += body.pnl;
+    }
+    const cashAfter = Number.isFinite(body.cashAfter) ? body.cashAfter : body.bankrollAfter;
+    if (Number.isFinite(cashAfter)) {
+      portfolioState.cash = cashAfter;
+      botState.cash = cashAfter;
+    }
+    portfolioState.openPositions = portfolioState.openPositions.filter((pos) => {
+      if (body.tradeId && pos.tradeId === body.tradeId) return false;
+      if (body.marketId && pos.marketId === body.marketId) return false;
+      return true;
+    });
+  }
+  if (eventType === 'entry' || eventType === 'exit') {
+    rememberTradeHistory({
+      type: eventType,
+      tradeId: body.tradeId || null,
+      logLine: body.logLine || body.detail || null,
+      direction: body.direction || null,
+      shares: body.shares ?? null,
+      entryPrice: body.entryPrice ?? null,
+      exitPrice: body.exitPrice ?? null,
+      betSize: body.betSize ?? null,
+      pnl: body.pnl ?? null,
+      won: typeof body.won === 'boolean' ? body.won : null,
+      question: body.question || null,
+      windowMinutes: body.windowMinutes ?? null,
+      windowLabel: body.windowLabel || null,
+      marketId: body.marketId || null,
+      cashAfter: body.cashAfter ?? body.bankrollAfter ?? null,
+      timestamp: body.timestamp || Date.now(),
+    });
+  }
+}
+
+function resetPortfolioSession() {
+  const cashState = resolvePortfolioCashFromAdjustments(STARTING_CASH);
+  portfolioState.cash = cashState.cash;
+  portfolioState.startingCash = cashState.startingCash;
+  portfolioState.netCashDelta = cashState.netCashDelta;
+  portfolioState.realizedPnlTotal = 0;
+  portfolioState.openPositions = [];
+  portfolioState.updatedAt = Date.now();
+  botState.cash = cashState.cash;
+}
+
+function parseCashAdjustmentRequest(body = {}) {
+  let delta = null;
+  if (Number.isFinite(body.delta)) {
+    delta = body.delta;
+  } else if (body.action === 'add' && Number.isFinite(body.amount)) {
+    delta = Math.abs(body.amount);
+  } else if (body.action === 'remove' && Number.isFinite(body.amount)) {
+    delta = -Math.abs(body.amount);
+  }
+  if (!Number.isFinite(delta) || delta === 0) {
+    return { error: 'Provide delta or action add/remove with amount' };
+  }
+  return {
+    delta,
+    updateBaseline: Boolean(body.updateBaseline),
+    note: typeof body.note === 'string' ? body.note : null,
+  };
+}
+
+function applyPortfolioCashAdjustment({ delta, updateBaseline = false, note = null }) {
+  if (portfolioState.mode !== 'paper') {
+    return { ok: false, statusCode: 403, error: 'Cash adjustments are paper-mode only' };
+  }
+  const nextCash = Math.round((portfolioState.cash + delta) * 100) / 100;
+  if (delta < 0 && nextCash < 0) {
+    return {
+      ok: false,
+      statusCode: 400,
+      error: `Cannot remove $${Math.abs(delta).toFixed(2)} — only $${portfolioState.cash.toFixed(2)} liquid cash available`,
+    };
+  }
+  const saved = appendCashAdjustment({
+    delta,
+    updateBaseline,
+    note,
+    envStartingCash: STARTING_CASH,
+  });
+  portfolioState.cash = nextCash;
+  portfolioState.netCashDelta = saved.netCashDelta;
+  if (updateBaseline && delta > 0) {
+    portfolioState.startingCash = saved.startingCashBaseline ?? portfolioState.startingCash;
+  } else if (Number.isFinite(saved.startingCashBaseline)) {
+    portfolioState.startingCash = saved.startingCashBaseline;
+  }
+  portfolioState.updatedAt = Date.now();
+  botState.cash = portfolioState.cash;
+  const snapshot = broadcastPortfolio({
+    cashAdjustment: { delta, updateBaseline, note },
+  });
+  return { ok: true, statusCode: 200, snapshot, netCashDelta: saved.netCashDelta };
+}
+
+function broadcastPortfolio(extra = {}) {
+  const payload = {
+    source: 'bot',
+    type: 'portfolio_snapshot',
+    timestamp: Date.now(),
+    ...portfolioSnapshot(),
+    ...extra,
+  };
+  broadcast(payload);
+  return payload;
+}
+
+function ingestBotEvent(body = {}) {
+  const dedupeKey = botEventDedupeKey(body);
+  if (dedupeKey && rememberBotEventKey(dedupeKey)) return null;
+
+  if (body.type === 'portfolio_snapshot' || body.eventType === 'portfolio_snapshot') {
+    applyPortfolioEvent(body);
+    return broadcastPortfolio();
+  }
+
+  if (body.type === 'entry' || body.type === 'exit' || body.eventType === 'entry' || body.eventType === 'exit') {
+    applyPortfolioEvent(body);
+    if (body.latencyTiming && (body.type === 'entry' || body.eventType === 'entry')) {
+      recordTradeDepthPipeline(body.latencyTiming);
+    }
+    const cashAfterEvt = Number.isFinite(body.cashAfter) ? body.cashAfter : body.bankrollAfter;
+    const cashBeforeEvt = Number.isFinite(body.cashBefore) ? body.cashBefore : body.bankrollBefore;
+    if (Number.isFinite(cashAfterEvt)) {
+      botState.cash = cashAfterEvt;
+    } else if (Number.isFinite(cashBeforeEvt)) {
+      botState.cash = cashBeforeEvt;
+    }
+    const payload = { source: 'bot', timestamp: Date.now(), ...body };
+    broadcast(payload);
+    broadcast({
+      source: 'bot',
+      type: 'state',
+      timestamp: Date.now(),
+      cash: botState.cash,
+      running: botState.running,
+      mode: botState.mode,
+      pid: botState.pid,
+    });
+    broadcastPortfolio();
+    sendStatus();
+    return payload;
+  }
+
+  const cashAfterIngest = Number.isFinite(body.cashAfter) ? body.cashAfter : body.bankrollAfter;
+  const cashBeforeIngest = Number.isFinite(body.cashBefore) ? body.cashBefore : body.bankrollBefore;
+  if (Number.isFinite(cashAfterIngest)) {
+    botState.cash = cashAfterIngest;
+    portfolioState.cash = cashAfterIngest;
+  } else if (Number.isFinite(cashBeforeIngest)) {
+    botState.cash = cashBeforeIngest;
+    portfolioState.cash = cashBeforeIngest;
+  }
+
+  const payload = { source: 'bot', timestamp: Date.now(), ...body };
+  broadcast(payload);
+  return payload;
+}
+
+function broadcastSse(payload) {
+  if (!sseClients.size) return;
+  const raw = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of sseClients) {
+    try {
+      res.write(raw);
+    } catch (_) {
+      sseClients.delete(res);
+    }
+  }
 }
 
 function broadcast(payload) {
@@ -116,6 +540,7 @@ function broadcast(payload) {
   for (const ws of clients) {
     if (ws.readyState === WebSocket.OPEN) ws.send(raw);
   }
+  broadcastSse(payload);
 }
 
 function debugPoly(...args) {
@@ -144,6 +569,11 @@ function emitPolymarketTrade(market, trade, via = 'clob_ws') {
   polymarketConnected = true;
   polyStreamStats.trades += 1;
   polyStreamStats.lastAt = Date.now();
+  recordStreamLatency('poly_ws_trade', {
+    sourceTs: trade.ts_ms,
+    receivedTs: Date.now(),
+    meta: { side: trade.side, price: trade.price },
+  });
 
   const payload = {
     source: 'polymarket',
@@ -196,16 +626,18 @@ function sendStatus() {
     lastPolyVia,
     polyStreamStats: DEBUG_POLY_STREAM ? { ...polyStreamStats } : undefined,
     selectedPolyMode,
+    selectedMarketId: selectedPrimaryMarketId,
     clientCount: clients.size,
     bot: {
       running: botState.running,
       pid: botState.pid,
       mode: botState.mode,
       strategyId: selectedStrategy,
-      bankroll: botState.bankroll,
+      cash: botState.cash,
       startedAt: botState.startedAt,
       stoppedAt: botState.stoppedAt,
       lastExitCode: botState.lastExitCode,
+      ...botSessionSnapshot(),
     },
   };
   broadcast(payload);
@@ -217,7 +649,7 @@ function sendStatus() {
         pid: botState.pid,
         mode: botState.mode,
         strategyId: selectedStrategy,
-        bankroll: botState.bankroll,
+        cash: botState.cash,
         startedAt: botState.startedAt,
         stoppedAt: botState.stoppedAt,
         lastExitCode: botState.lastExitCode,
@@ -253,16 +685,32 @@ function bridgeNatsMessage(subject, msg) {
   if (wire.source === 'binance' && wire.type === 'price') binanceConnected = true;
   if (wire.source === 'polymarket') polymarketConnected = true;
 
-  if (wire.source === 'bot' && wire.type === 'state') {
-    if (Number.isFinite(wire.bankroll)) botState.bankroll = wire.bankroll;
-    if (typeof wire.running === 'boolean') botState.running = wire.running;
-  }
-  if (wire.source === 'bot' && Number.isFinite(wire.bankrollAfter)) {
-    botState.bankroll = wire.bankrollAfter;
-  }
   if (wire.source === 'bot' && wire.type === 'log') {
     botState.logs.unshift(wire);
     if (botState.logs.length > 250) botState.logs.pop();
+    broadcast(wire);
+    return;
+  }
+
+  if (wire.source === 'bot' && wire.type !== 'control') {
+    if (wire.type === 'state') {
+      const wireCash = Number.isFinite(wire.cash) ? wire.cash : wire.bankroll;
+      if (Number.isFinite(wireCash)) {
+        botState.cash = wireCash;
+        portfolioState.cash = wireCash;
+      }
+      if (typeof wire.running === 'boolean') botState.running = wire.running;
+    }
+    if (['entry', 'exit', 'portfolio_snapshot', 'state'].includes(wire.type)
+      || wire.eventType === 'portfolio_snapshot') {
+      ingestBotEvent(wire);
+      return;
+    }
+    const wireCashAfter = Number.isFinite(wire.cashAfter) ? wire.cashAfter : wire.bankrollAfter;
+    if (Number.isFinite(wireCashAfter)) {
+      botState.cash = wireCashAfter;
+      portfolioState.cash = wireCashAfter;
+    }
   }
 
   broadcast(wire);
@@ -295,9 +743,13 @@ const PAGE_ROUTES = {
   '/live': '/live.html',
   '/orderbook': '/orderbook.html',
   '/bot': '/bot.html',
+  '/portfolio': '/portfolio.html',
   '/markets': '/markets.html',
   '/backtest': '/backtest.html',
+  '/lab': '/lab.html',
+  '/strategy': '/lab.html',
   '/docs': '/docs/index.html',
+  '/latency': '/latency.html',
 };
 
 function serveStatic(req, res) {
@@ -341,9 +793,149 @@ function marketWireFields(m) {
     windowMinutes: m.windowMinutes,
     endTime: m.endTime,
     slug: m.slug,
+    tokenIdYes: m.tokenIdYes,
+    tokenIdNo: m.tokenIdNo,
     windowStartTime: m.windowStartTime ?? parseWindowStartMs(m) ?? undefined,
     priceToBeat: m.priceToBeat,
     priceToBeatSource: m.priceToBeatSource,
+    liquidity: m.liquidity,
+    volume24h: m.volume24h,
+    outcomePrices: m.outcomePrices,
+    active: m.active,
+    closed: m.closed,
+    isPrimary: m.conditionId === selectedPrimaryMarketId,
+  };
+}
+
+function syncPrimaryMarketId(preferredId = selectedPrimaryMarketId) {
+  lastMarkets = filterLiveMarketsForMode(lastMarkets, selectedPolyMode);
+  const primary = pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, preferredId);
+  if (primary) selectedPrimaryMarketId = primary.conditionId;
+  else selectedPrimaryMarketId = null;
+  return primary;
+}
+
+function getPrimaryMarket() {
+  if (!lastMarkets.length) return null;
+  return pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, selectedPrimaryMarketId);
+}
+
+function windowQueryToKey(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  if (v === '5' || v === '5m') return '5m';
+  if (v === '15' || v === '15m') return '15m';
+  if (v === '1d' || v === 'daily' || v === '1440') return '1d';
+  return null;
+}
+
+async function buildMarketDetailPayload(conditionId) {
+  const detail = await getMarketDetails(conditionId);
+  if (!detail) return null;
+
+  const beat = await resolvePriceToBeat(detail);
+  const enriched = beat ? { ...detail, ...beat } : detail;
+
+  let yesPrice = null;
+  let noPrice = null;
+  let marketParams = null;
+  try {
+    const [yesMid, noMid, yesBook] = await Promise.all([
+      detail.tokenIdYes ? getMidpoint(detail.tokenIdYes).catch(() => null) : null,
+      detail.tokenIdNo ? getMidpoint(detail.tokenIdNo).catch(() => null) : null,
+      detail.tokenIdYes ? getOrderBook(detail.tokenIdYes).catch(() => null) : null,
+    ]);
+    const paired = pairYesNoPrices(yesMid, noMid);
+    yesPrice = paired.yes;
+    noPrice = paired.no;
+    if (yesBook) {
+      const { params } = computeAllMarketParams(yesBook, { marketMeta: enriched });
+      marketParams = params;
+    }
+  } catch (_) {}
+
+  const binance = getBinanceState().price;
+  const spot = Number.isFinite(binance) ? binance : null;
+  const btcDelta = Number.isFinite(enriched.priceToBeat) && Number.isFinite(spot)
+    ? spot - enriched.priceToBeat
+    : null;
+
+  return {
+    market: enriched,
+    live: { yesPrice, noPrice, btcSpot: spot, btcDelta },
+    marketParams,
+    polymarketUrl: enriched.polymarketUrl || (enriched.slug ? `https://polymarket.com/event/${enriched.slug}` : null),
+    timestamp: Date.now(),
+  };
+}
+
+async function broadcastMarketDetails(conditionId) {
+  const payload = await buildMarketDetailPayload(conditionId);
+  if (!payload) return null;
+  lastMarketDetails = payload;
+  broadcast({
+    source: 'polymarket',
+    type: 'market_details',
+    ...payload,
+  });
+  return payload;
+}
+
+async function setPrimaryMarket(conditionId, options = {}) {
+  const id = String(conditionId || '').trim();
+  if (!id) return { ok: false, error: 'conditionId required' };
+
+  let detail = await getMarketDetails(id);
+  if (!detail) return { ok: false, error: 'Market not found' };
+
+  const windowMinutes = detail.windowMinutes;
+  const windowKey = windowMinutesToMode(windowMinutes) || '15m';
+
+  if (!isMarketLive(detail)) {
+    const liveSeries = await listLiveBTCMarketsForWindow(windowKey);
+    const nextLive = pickPrimaryLiveMarket(liveSeries, [windowMinutes]);
+    if (!nextLive) {
+      return { ok: false, error: 'Market resolved and no live market available in this series' };
+    }
+    detail = nextLive;
+  }
+
+  const beat = await resolvePriceToBeat(detail);
+  if (beat) detail = { ...detail, ...beat };
+
+  selectedPrimaryMarketId = detail.conditionId;
+
+  if (options.syncMode !== false) {
+    const nextMode = normalizePolyMode(windowKey);
+    if (nextMode !== selectedPolyMode && ['5m', '15m', '1d'].includes(nextMode)) {
+      selectedPolyMode = nextMode;
+    }
+  }
+
+  lastMarkets = filterLiveMarketsForMode([detail, ...lastMarkets], selectedPolyMode);
+  const primary = syncPrimaryMarketId(detail.conditionId);
+  if (primary) detail = primary;
+
+  if (!USE_NATS_FEEDS) {
+    await subscribePolymarketMarkets();
+  } else {
+    broadcast({
+      source: 'polymarket',
+      type: 'market_selected',
+      conditionId: detail.conditionId,
+      selectedMode: selectedPolyMode,
+      market: marketWireFields(detail),
+      timestamp: Date.now(),
+    });
+    await broadcastMarketDetails(detail.conditionId);
+    sendStatus();
+  }
+
+  return {
+    ok: true,
+    market: marketWireFields(detail),
+    selectedPolyMode,
+    selectedMarketId: detail.conditionId,
+    rolledFrom: id !== detail.conditionId ? id : undefined,
   };
 }
 
@@ -394,16 +986,7 @@ async function enrichMarketsWithBeat(markets) {
 }
 
 function filterAndRankMarkets(markets, mode) {
-  const allowed = modeToWindows(mode);
-  const now = Date.now();
-  const byId = new Map();
-  for (const m of markets || []) {
-    if (!m?.conditionId || !Number.isFinite(m?.endTime)) continue;
-    if (!allowed.includes(m.windowMinutes)) continue;
-    if (m.endTime <= now) continue;
-    byId.set(m.conditionId, m);
-  }
-  return [...byId.values()].sort((a, b) => a.endTime - b.endTime);
+  return filterLiveMarketsForMode(markets, mode);
 }
 
 function makeBotLogLine(text, level = 'info') {
@@ -424,17 +1007,20 @@ function handleBotOutput(chunk, level = 'info') {
   if (!data.trim()) return;
   const lines = data.split(/\r?\n/).filter(Boolean);
   for (const line of lines) {
-    const money = line.match(/bankroll=\$([0-9]+(?:\.[0-9]+)?)/i)
+    const money = line.match(/cash=\$([0-9]+(?:\.[0-9]+)?)/i)
+      || line.match(/cash:\s*\$?([0-9]+(?:\.[0-9]+)?)/i)
+      || line.match(/bankroll=\$([0-9]+(?:\.[0-9]+)?)/i)
       || line.match(/bankroll:\s*\$?([0-9]+(?:\.[0-9]+)?)/i);
     if (money) {
       const val = Number.parseFloat(money[1]);
       if (Number.isFinite(val)) {
-        botState.bankroll = val;
+        botState.cash = val;
+        portfolioState.cash = val;
         broadcast({
           source: 'bot',
           type: 'state',
           timestamp: Date.now(),
-          bankroll: botState.bankroll,
+          cash: botState.cash,
           running: botState.running,
           mode: botState.mode,
           pid: botState.pid,
@@ -454,7 +1040,10 @@ function setupBotProcessHandlers(child) {
     botState.stoppedAt = Date.now();
     botState.lastExitCode = Number.isInteger(code) ? code : null;
     botProcess = null;
+    portfolioState.openPositions = [];
+    portfolioState.updatedAt = Date.now();
     broadcast(makeBotLogLine(`Bot exited (code=${code ?? 'null'}, signal=${signal || 'none'})`, 'warn'));
+    broadcastPortfolio();
     sendStatus();
   });
 }
@@ -477,7 +1066,8 @@ function summarizeBookLevels(levels = [], side = 'bid') {
 }
 
 async function publishOrderbookSnapshot() {
-  const market = lastMarkets[0];
+  const pollStart = Date.now();
+  const market = getPrimaryMarket();
   if (!market?.tokenIdYes && !market?.tokenIdNo) return;
   try {
     const [yesBook, noBook] = await Promise.all([
@@ -489,6 +1079,10 @@ async function publishOrderbookSnapshot() {
     const yesAsk = summarizeBookLevels(yesBook?.asks || [], 'ask');
     const noBid = summarizeBookLevels(noBook?.bids || [], 'bid');
     const noAsk = summarizeBookLevels(noBook?.asks || [], 'ask');
+    if (yesBook) {
+      const labPayload = buildLabParamsPayload(market, yesBook, botState.cash);
+      if (labPayload) broadcast(labPayload);
+    }
     broadcast({
       source: 'polymarket',
       type: 'orderbook',
@@ -507,6 +1101,11 @@ async function publishOrderbookSnapshot() {
     polymarketConnected = true;
     polyStreamStats.orderbook += 1;
     polyStreamStats.lastAt = Date.now();
+    recordStreamLatency('poly_orderbook_poll', {
+      sourceTs: pollStart,
+      receivedTs: Date.now(),
+      meta: { conditionId: market.conditionId?.slice(0, 12) },
+    });
   } catch (e) {
     broadcast({
       source: 'polymarket',
@@ -524,18 +1123,70 @@ function restartOrderbookPolling() {
   }, ORDERBOOK_POLL_MS);
 }
 
+function syncSessionFromProfile(profile = botProfile) {
+  selectedBotMarketWindow = profile.marketWindow;
+  botRunLimit = { ...profile.runLimit };
+  selectedStrategy = profile.strategyId;
+}
+
+function botProfileSnapshot() {
+  return {
+    strategyId: selectedStrategy,
+    marketWindow: selectedBotMarketWindow,
+    runLimit: { ...botRunLimit },
+    stopLossPct: botProfile.stopLossPct,
+    stopLossPrice: botProfile.stopLossPrice,
+    stopThreshold: botProfile.stopThreshold,
+    entryMinSeconds: botProfile.entryMinSeconds,
+    entryMaxSeconds: botProfile.entryMaxSeconds,
+    entryMinPrice: botProfile.entryMinPrice,
+    entryMaxPrice: botProfile.entryMaxPrice,
+    maxTradesPerMarket: botProfile.maxTradesPerMarket,
+    updatedAt: botProfile.updatedAt,
+  };
+}
+
+function botSessionSnapshot() {
+  return botProfileSnapshot();
+}
+
+function applyBotProfile(body = {}, { persist = true } = {}) {
+  const partial = { ...body };
+  if (body.profile && typeof body.profile === 'object') {
+    Object.assign(partial, body.profile);
+  }
+  const merged = normalizeBotProfile(
+    {
+      ...botProfileSnapshot(),
+      ...partial,
+      marketWindow: partial.marketWindow ?? selectedBotMarketWindow,
+      runLimit: partial.runLimit ?? botRunLimit,
+      strategyId: partial.strategyId ?? selectedStrategy,
+    },
+    botProfile
+  );
+  botProfile = persist ? saveBotProfile(merged) : merged;
+  syncSessionFromProfile(botProfile);
+  return botProfile;
+}
+
+/** @deprecated use applyBotProfile */
+function applyBotSessionConfig(body = {}) {
+  applyBotProfile(body);
+}
+
 function spawnBotEnv() {
   const botNatsFeeds = process.env.BOT_USE_NATS_FEEDS === 'true' || USE_NATS_FEEDS;
   return {
     ...process.env,
+    ...profileToEnv(botProfileSnapshot()),
     PAPER_TRADE: 'true',
     ENABLE_DASHBOARD_FEED: 'true',
+    DASHBOARD_PORT: String(PORT),
     USE_NATS: USE_NATS ? 'true' : 'false',
     USE_NATS_FEEDS: USE_NATS_FEEDS ? 'true' : 'false',
     NATS_URL: process.env.NATS_URL || 'nats://127.0.0.1:4222',
     BOT_USE_NATS_FEEDS: botNatsFeeds ? 'true' : 'false',
-    BOT_STRATEGY: selectedStrategy,
-    MARKET_WINDOW: selectedPolyMode === 'both' ? 'both' : selectedPolyMode.replace('m', ''),
   };
 }
 
@@ -558,8 +1209,14 @@ function startBotProcess() {
   botState.startedAt = Date.now();
   botState.stoppedAt = null;
   botState.lastExitCode = null;
+  resetPortfolioSession();
   setupBotProcessHandlers(child);
-  broadcast(makeBotLogLine(`Bot started (pid=${botState.pid || 'n/a'})`, 'info'));
+  const session = botSessionSnapshot();
+  broadcast(makeBotLogLine(
+    `Bot started (pid=${botState.pid || 'n/a'}) · markets=${session.marketWindow} · ${session.runLimit.mode === 'trades' ? `limit ${session.runLimit.tradeCount} trades` : session.runLimit.mode === 'end_of_day' ? 'until EOD' : 'no limit'}`,
+    'info'
+  ));
+  broadcastPortfolio();
   sendStatus();
   return { ok: true, statusCode: 200, body: { bot: botState } };
 }
@@ -605,6 +1262,33 @@ function stopBotProcess() {
   });
 }
 
+async function maybeRollPrimaryMarket() {
+  if (USE_NATS_FEEDS) return false;
+  const previousId = selectedPrimaryMarketId;
+  const current = lastMarkets.find((m) => m.conditionId === previousId) || getPrimaryMarket();
+  if (!primaryNeedsRoll(current)) return false;
+
+  await subscribePolymarketMarkets();
+  if (!selectedPrimaryMarketId || selectedPrimaryMarketId === previousId) return false;
+
+  const next = getPrimaryMarket();
+  debugPoly('rolled primary market', previousId?.slice(0, 12), '→', selectedPrimaryMarketId.slice(0, 12));
+  broadcast({
+    source: 'polymarket',
+    type: 'market_rolled',
+    previousMarketId: previousId,
+    conditionId: selectedPrimaryMarketId,
+    selectedMode: selectedPolyMode,
+    market: next ? marketWireFields(next) : undefined,
+    timestamp: Date.now(),
+  });
+  return true;
+}
+
+function subscriptionStale(cycle) {
+  return cycle !== polySubscriptionCycle;
+}
+
 async function subscribePolymarketMarkets() {
   const cycle = ++polySubscriptionCycle;
   closePolySubscriptions();
@@ -613,8 +1297,10 @@ async function subscribePolymarketMarkets() {
   let markets;
   try {
     markets = await getActiveBTCShortMarkets(modeToWindows(selectedPolyMode));
+    if (subscriptionStale(cycle)) return;
     lastMarkets = filterAndRankMarkets(markets, selectedPolyMode);
   } catch (e) {
+    if (subscriptionStale(cycle)) return;
     broadcast({
       source: 'polymarket',
       type: 'error',
@@ -626,12 +1312,14 @@ async function subscribePolymarketMarkets() {
   }
 
   if (!lastMarkets.length) {
+    if (subscriptionStale(cycle)) return;
+    selectedPrimaryMarketId = null;
     broadcast({
       source: 'polymarket',
       type: 'markets',
       markets: [],
       selectedMode: selectedPolyMode,
-      message: 'No active BTC 5m/15m markets',
+      message: 'No active BTC 5m/15m/1d markets',
       timestamp: Date.now(),
     });
     sendStatus();
@@ -639,19 +1327,30 @@ async function subscribePolymarketMarkets() {
   }
 
   lastMarkets = await enrichMarketsWithBeat(lastMarkets);
+  if (subscriptionStale(cycle)) return;
+
+  const primary = syncPrimaryMarketId();
+  if (!primary) {
+    if (subscriptionStale(cycle)) return;
+    selectedPrimaryMarketId = null;
+    sendStatus();
+    return;
+  }
 
   broadcast({
     source: 'polymarket',
     type: 'markets',
     selectedMode: selectedPolyMode,
+    selectedMarketId: selectedPrimaryMarketId,
     markets: lastMarkets.map((m) => marketWireFields(m)),
     timestamp: Date.now(),
   });
 
-  const primary = lastMarkets[0];
-  const emitPrices = (market, yesPrice, noPrice, side, via = 'ws') => {
+  if (subscriptionStale(cycle)) return;
+  broadcastMarketDetails(primary.conditionId).catch(() => {});
+  const emitPrices = (market, yesPrice, noPrice, side, via = 'ws', timing = null) => {
     if (cycle !== polySubscriptionCycle) return;
-    if (market.conditionId !== primary.conditionId) return;
+    if (market.conditionId !== selectedPrimaryMarketId) return;
     const { yes, no } = pairYesNoPrices(yesPrice, noPrice);
     if (yes == null && no == null) return;
     if (via === 'ws') {
@@ -664,7 +1363,21 @@ async function subscribePolymarketMarkets() {
     if (via === 'ws') polyStreamStats.ws += 1;
     else if (via === 'midpoint' || via === 'midpoint_poll') polyStreamStats.midpoint += 1;
     polyStreamStats.lastAt = Date.now();
+    const receivedAt = Date.now();
+    if (via === 'ws' && timing?.sourceTs) {
+      recordStreamLatency('poly_ws_price', {
+        sourceTs: timing.sourceTs,
+        receivedTs: timing.receivedAt || receivedAt,
+        meta: { side, eventType: timing.eventType },
+      });
+    } else if (via === 'midpoint' || via === 'midpoint_poll') {
+      // REST RTT recorded in getMidpoint() when applicable.
+    }
     debugPoly(via, { yes, no, side, q: market.question?.slice(0, 40) });
+    rememberMarketYesPrice(market.conditionId, yes);
+    if (revalueOpenPositionsFromCache()) {
+      broadcastPortfolio();
+    }
     broadcast({
       source: 'polymarket',
       type: 'price',
@@ -672,6 +1385,7 @@ async function subscribePolymarketMarkets() {
       via,
       yesPrice: yes,
       noPrice: no,
+      latencyMs: timing?.sourceTs ? receivedAt - timing.sourceTs : undefined,
       market: {
         ...marketWireFields(market),
         selectedMode: selectedPolyMode,
@@ -692,14 +1406,15 @@ async function subscribePolymarketMarkets() {
   };
 
   await seedMidpoints(primary);
+  if (subscriptionStale(cycle)) return;
 
   const assets = [primary.tokenIdYes, primary.tokenIdNo].filter(Boolean);
   if (assets.length) {
     const handle = subscribeClobAssets(
       assets,
-      (assetId, price) => {
-        if (assetId === primary.tokenIdYes) emitPrices(primary, price, null, 'yes', 'ws');
-        else if (assetId === primary.tokenIdNo) emitPrices(primary, null, price, 'no', 'ws');
+      (assetId, price, eventType, timing) => {
+        if (assetId === primary.tokenIdYes) emitPrices(primary, price, null, 'yes', 'ws', timing);
+        else if (assetId === primary.tokenIdNo) emitPrices(primary, null, price, 'no', 'ws', timing);
       },
       (err) => {
         const msg = String(err?.message || err);
@@ -727,8 +1442,9 @@ async function subscribePolymarketMarkets() {
 function startMidpointFallback() {
   setInterval(async () => {
     if (!polySubscriptions.size) return;
+    if (await maybeRollPrimaryMarket()) return;
     lastMarkets = filterAndRankMarkets(lastMarkets, selectedPolyMode);
-    const market = lastMarkets[0];
+    const market = getPrimaryMarket();
     if (!market) return;
     try {
       const [yesPrice, noPrice] = await Promise.all([
@@ -755,6 +1471,10 @@ function startMidpointFallback() {
         timestamp: Date.now(),
         via: 'midpoint_poll',
       });
+      rememberMarketYesPrice(market.conditionId, yes);
+      if (revalueOpenPositionsFromCache()) {
+        broadcastPortfolio();
+      }
     } catch (_) {}
     sendStatus();
   }, MIDPOINT_FALLBACK_MS);
@@ -779,16 +1499,19 @@ function startChainlinkPoll() {
 
 function startBinanceFeed() {
   const url = process.env.BINANCE_WS_URL || 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade';
-  connectBinanceFeed((price) => {
+  connectBinanceFeed((price, timing) => {
     binanceConnected = true;
     const chainlink = getChainlinkState();
+    const receivedAt = timing?.receivedAt || Date.now();
     broadcast({
       source: 'binance',
       type: 'price',
       price,
       chainlinkPrice: Number.isFinite(chainlink.price) ? chainlink.price : undefined,
+      chainlinkAgeMs: chainlink.updatedAt ? receivedAt - chainlink.updatedAt : undefined,
       symbol: 'BTCUSDT',
-      timestamp: Date.now(),
+      latencyMs: timing?.latencyMs,
+      timestamp: receivedAt,
     });
   });
   startChainlinkPoll();
@@ -799,27 +1522,7 @@ function startHttpServer() {
     if (req.method === 'POST' && req.url === '/api/bot-event') {
       try {
         const body = await readJsonBody(req);
-        if (Number.isFinite(body?.bankrollAfter)) {
-          botState.bankroll = body.bankrollAfter;
-        } else if (Number.isFinite(body?.bankrollBefore)) {
-          botState.bankroll = body.bankrollBefore;
-        }
-        if (!USE_NATS) {
-          const payload = { source: 'bot', timestamp: Date.now(), ...body };
-          broadcast(payload);
-          if (Number.isFinite(botState.bankroll)) {
-            broadcast({
-              source: 'bot',
-              type: 'state',
-              timestamp: Date.now(),
-              bankroll: botState.bankroll,
-              running: botState.running,
-              mode: botState.mode,
-              pid: botState.pid,
-            });
-          }
-          sendStatus();
-        }
+        ingestBotEvent(body);
         res.writeHead(204);
         res.end();
       } catch (e) {
@@ -828,9 +1531,187 @@ function startHttpServer() {
       }
       return;
     }
-    if (req.method === 'GET' && req.url === '/api/bot/status') {
+    if (req.method === 'GET' && req.url === '/api/latency') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ bot: { ...botState, strategyId: selectedStrategy }, selectedPolyMode, strategies: strategyOptions }));
+      res.end(JSON.stringify(getSnapshot()));
+      return;
+    }
+    if (req.method === 'GET' && (req.url === '/api/events/stream' || req.url === '/stream')) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+      });
+      res.write(': connected\n\n');
+      sseClients.add(res);
+      res.write(`data: ${JSON.stringify({ source: 'latency', type: 'snapshot', ...getSnapshot() })}\n\n`);
+      req.on('close', () => sseClients.delete(res));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/latency/trade-poll') {
+      try {
+        const body = await readJsonBody(req);
+        if (body?.tradeId && body?.poll) ingestTradePoll(body.tradeId, body.poll);
+        res.writeHead(204);
+        res.end();
+      } catch (_) {
+        res.writeHead(400);
+        res.end('Bad JSON');
+      }
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/portfolio') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(portfolioSnapshot()));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/portfolio/cash') {
+      try {
+        const body = await readJsonBody(req);
+        const parsed = parseCashAdjustmentRequest(body);
+        if (parsed.error) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: parsed.error }));
+          return;
+        }
+        const result = applyPortfolioCashAdjustment(parsed);
+        res.writeHead(result.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: result.ok,
+          error: result.error || null,
+          portfolio: result.snapshot || portfolioSnapshot(),
+          netCashDelta: result.netCashDelta ?? portfolioState.netCashDelta,
+          botRunning: botState.running,
+          botSyncNote: botState.running
+            ? 'Running bot picks up adjustments on its next cycle via data/cash-adjustments.json'
+            : null,
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: err.message || String(err) }));
+      }
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/portfolio/close-resolved') {
+      try {
+        const resolvedMap = new Map();
+        const recent = await getRecentResolvedMarkets(60).catch(() => []);
+        for (const m of recent) {
+          if (m.outcome === 'Yes' || m.outcome === 'No') {
+            resolvedMap.set(m.conditionId, m.outcome);
+          }
+        }
+        const result = await closeResolvedPositions(portfolioState.openPositions, {
+          resolvedMap,
+          cash: portfolioState.cash,
+          realizedPnlTotal: portfolioState.realizedPnlTotal,
+        });
+        const closedSummaries = [];
+        for (const { exitEvent } of result.closed) {
+          applyPortfolioEvent({
+            ...exitEvent,
+            type: 'exit',
+            mode: portfolioState.mode,
+            timestamp: exitEvent.exitTime || Date.now(),
+          });
+          closedSummaries.push({
+            tradeId: exitEvent.tradeId,
+            marketId: exitEvent.marketId,
+            question: exitEvent.question,
+            pnl: exitEvent.pnl,
+            exitPrice: exitEvent.exitPrice,
+            resolvedOutcome: exitEvent.resolvedOutcome,
+          });
+        }
+        portfolioState.openPositions = result.remaining;
+        portfolioState.cash = result.cash;
+        portfolioState.realizedPnlTotal = result.realizedPnlTotal;
+        portfolioState.updatedAt = Date.now();
+        botState.cash = result.cash;
+        const snapshot = broadcastPortfolio();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          ok: true,
+          closedCount: result.closed.length,
+          closed: closedSummaries,
+          portfolio: snapshot,
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: err.message || String(err) }));
+      }
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/bot/status') {
+      const activePreset = getActivePreset();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        bot: { ...botState, strategyId: selectedStrategy, ...botSessionSnapshot() },
+        sizing: resolveSizingConfig(activePreset),
+        selectedPolyMode,
+        botSession: botSessionSnapshot(),
+        strategies: strategyOptions,
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/bot/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        botSession: botSessionSnapshot(),
+        profile: botProfileSnapshot(),
+        running: botState.running,
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/bot/config') {
+      try {
+        const body = await readJsonBody(req);
+        applyBotProfile(body);
+        sendStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          botSession: botSessionSnapshot(),
+          profile: botProfileSnapshot(),
+          running: botState.running,
+        }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Bad JSON' }));
+      }
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/bot/profile') {
+      const activePreset = getActivePreset();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        profile: botProfileSnapshot(),
+        botSession: botSessionSnapshot(),
+        strategies: strategyOptions,
+        activeLabPreset: { id: activePreset.id, name: activePreset.name },
+        running: botState.running,
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/bot/profile') {
+      try {
+        const body = await readJsonBody(req);
+        applyBotProfile(body);
+        if (body.applyLabPreset) {
+          const active = getActivePreset();
+          setActivePreset(active);
+        }
+        sendStatus();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          profile: botProfileSnapshot(),
+          botSession: botSessionSnapshot(),
+          selectedStrategy,
+          running: botState.running,
+        }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Bad JSON' }));
+      }
       return;
     }
     if (req.method === 'GET' && req.url === '/api/bot/strategies') {
@@ -841,7 +1722,7 @@ function startHttpServer() {
     if (req.method === 'POST' && req.url === '/api/bot/strategy') {
       try {
         const body = await readJsonBody(req);
-        selectedStrategy = normalizeStrategyId(body?.strategyId);
+        applyBotProfile({ strategyId: body?.strategyId });
         await publishBotControl('strategy', { strategyId: selectedStrategy });
         sendStatus();
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -853,9 +1734,20 @@ function startHttpServer() {
       return;
     }
     if (req.method === 'POST' && req.url === '/api/bot/start') {
+      let startBody = {};
+      try {
+        startBody = await readJsonBody(req);
+      } catch (_) {
+        startBody = {};
+      }
+      applyBotSessionConfig(startBody);
       const result = await enqueueBotLifecycle(async () => {
         if (botStopPromise) await botStopPromise;
-        await publishBotControl('start', { strategyId: selectedStrategy, mode: selectedPolyMode });
+        await publishBotControl('start', {
+          strategyId: selectedStrategy,
+          mode: selectedPolyMode,
+          ...botSessionSnapshot(),
+        });
         return startBotProcess();
       });
       res.writeHead(result.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -875,15 +1767,18 @@ function startHttpServer() {
       try {
         const body = await readJsonBody(req);
         const nextMode = normalizePolyMode(body?.mode);
-        if (nextMode !== selectedPolyMode) {
-          selectedPolyMode = nextMode;
+        selectedPolyMode = nextMode;
+        selectedPrimaryMarketId = null;
+        if (USE_NATS_FEEDS) {
           await publishBotControl('window', { mode: selectedPolyMode });
-          if (!USE_NATS_FEEDS) await subscribePolymarketMarkets();
+        }
+        if (!USE_NATS_FEEDS) {
+          await subscribePolymarketMarkets();
         } else {
           sendStatus();
         }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ selectedPolyMode }));
+        res.end(JSON.stringify({ selectedPolyMode, selectedMarketId: selectedPrimaryMarketId }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ error: 'Bad JSON' }));
@@ -892,7 +1787,183 @@ function startHttpServer() {
     }
     if (req.method === 'GET' && req.url === '/api/polymarket/mode') {
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ selectedPolyMode }));
+      res.end(JSON.stringify({ selectedPolyMode, selectedMarketId: selectedPrimaryMarketId }));
+      return;
+    }
+
+    const urlPath = req.url.split('?')[0];
+    const urlQuery = req.url.includes('?') ? new URLSearchParams(req.url.split('?')[1]) : null;
+
+    if (req.method === 'GET' && urlPath === '/api/markets') {
+      const windowKey = windowQueryToKey(urlQuery?.get('window'));
+      if (!windowKey) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'window query required (5m, 15m, or 1d)' }));
+        return;
+      }
+      try {
+        const markets = await listLiveBTCMarketsForWindow(windowKey);
+        const enriched = await enrichMarketsWithBeat(markets);
+        const windowMinutes = modeToWindows(windowKey)[0];
+        const preferred = getPrimaryMarket()?.windowMinutes === windowMinutes
+          ? selectedPrimaryMarketId
+          : null;
+        const primary = pickPrimaryLiveMarket(enriched, [windowMinutes], preferred);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          window: windowKey,
+          count: enriched.length,
+          selectedMarketId: primary?.conditionId || null,
+          markets: enriched.map((m) => marketWireFields(m)),
+          timestamp: Date.now(),
+        }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    const marketDetailMatch = urlPath.match(/^\/api\/markets\/(0x[a-fA-F0-9]+)$/);
+    if (req.method === 'GET' && marketDetailMatch) {
+      try {
+        const payload = await buildMarketDetailPayload(marketDetailMatch[1]);
+        if (!payload) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Market not found' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(payload));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/markets/select') {
+      try {
+        const body = await readJsonBody(req);
+        const result = await setPrimaryMarket(body?.conditionId, { syncMode: body?.syncMode !== false });
+        if (!result.ok) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify(result));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: e.message || 'Bad JSON' }));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && urlPath === '/api/markets/selected') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        selectedMarketId: selectedPrimaryMarketId,
+        selectedPolyMode,
+        market: getPrimaryMarket() ? marketWireFields(getPrimaryMarket()) : null,
+        details: lastMarketDetails,
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/lab/params') {
+      const snapshot = getLastLabParams();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(snapshot || { params: null, message: 'No params computed yet' }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/lab/presets') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        presets: listPresets(),
+        active: getActivePreset(),
+        defaults: defaultPresetFields(),
+        sizingDefaults: sizingSnapshot(),
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/bot/sizing') {
+      const active = getActivePreset();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({
+        sizing: sizingSnapshot(active),
+        active: {
+          id: active.id,
+          name: active.name,
+          sizingMode: active.sizingMode,
+          fixedBetUsd: active.fixedBetUsd,
+          kellyFractionCap: active.kellyFractionCap,
+        },
+      }));
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/api/lab/preset/active') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ active: getActivePreset() }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/lab/preset') {
+      try {
+        const body = await readJsonBody(req);
+        const saved = savePreset(body);
+        let active = getActivePreset();
+        if (body.apply) {
+          active = setActivePreset(saved);
+          if (body.botProfile && typeof body.botProfile === 'object') {
+            applyBotProfile(body.botProfile);
+          }
+          broadcast({
+            source: 'lab',
+            type: 'preset_applied',
+            timestamp: Date.now(),
+            preset: active,
+            sizing: resolveSizingConfig(active),
+            profile: botProfileSnapshot(),
+          });
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ preset: saved, active, applied: Boolean(body.apply) }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Bad JSON' }));
+      }
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/lab/preset/apply') {
+      try {
+        const body = await readJsonBody(req);
+        const preset = body?.id ? listPresets().find((p) => p.id === body.id) : body;
+        if (!preset) {
+          res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ error: 'Preset not found' }));
+          return;
+        }
+        const active = setActivePreset(preset);
+        if (body.botProfile && typeof body.botProfile === 'object') {
+          applyBotProfile(body.botProfile);
+        }
+        broadcast({
+          source: 'lab',
+          type: 'preset_applied',
+          timestamp: Date.now(),
+          preset: active,
+          sizing: resolveSizingConfig(active),
+          profile: botProfileSnapshot(),
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+          active,
+          sizing: resolveSizingConfig(active),
+          profile: botProfileSnapshot(),
+        }));
+      } catch (_) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ error: 'Bad JSON' }));
+      }
       return;
     }
     serveStatic(req, res);
@@ -911,26 +1982,41 @@ function startHttpServer() {
       timestamp: Date.now(),
       port: PORT,
       selectedPolyMode,
+      selectedMarketId: selectedPrimaryMarketId,
       strategies: strategyOptions,
       selectedStrategy,
       bot: {
         running: botState.running,
         pid: botState.pid,
-        bankroll: botState.bankroll,
+        cash: botState.cash,
         mode: botState.mode,
         strategyId: selectedStrategy,
       },
+      portfolio: portfolioSnapshot(),
     }));
     sendStatus();
   });
 
-  hub.on('dashboard', (event) => broadcast(event));
+  hub.on('dashboard', (event) => {
+    if (event?.source === 'bot') ingestBotEvent(event);
+    else if (event?.source === 'lab' && event?.type === 'params') broadcast(event);
+    else broadcast(event);
+  });
 
   server.listen(PORT, () => {
     console.log(`[Dashboard] http://localhost:${PORT}/live`);
-    console.log(`[Dashboard] pages: /live /orderbook /bot /markets /backtest /docs`);
+    console.log(`[Dashboard] pages: /live /orderbook /bot /portfolio /markets /backtest /lab /latency /docs`);
     console.log(`[Dashboard] WebSocket ws://localhost:${PORT}/ws`);
+    console.log(`[Dashboard] SSE       http://localhost:${PORT}/api/events/stream`);
   });
+
+  onSnapshot((snap) => {
+    broadcast({ source: 'latency', type: 'snapshot', ...snap });
+  });
+
+  setInterval(() => {
+    broadcast({ source: 'latency', type: 'snapshot', ...getSnapshot() });
+  }, 3000);
 
   return server;
 }
@@ -999,6 +2085,9 @@ async function startDirectFeeds() {
   await subscribePolymarketMarkets();
   await publishOrderbookSnapshot();
   setInterval(subscribePolymarketMarkets, MARKET_REFRESH_MS);
+  setInterval(() => {
+    maybeRollPrimaryMarket().catch(() => {});
+  }, MARKET_ROLL_CHECK_MS);
   startMidpointFallback();
   restartOrderbookPolling();
 }

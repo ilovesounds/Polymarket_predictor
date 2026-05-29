@@ -23,8 +23,11 @@
       <a href="/live">Live</a>
       <a href="/orderbook">Orderbook</a>
       <a href="/bot">Bot</a>
+      <a href="/portfolio">Portfolio</a>
       <a href="/markets">Markets</a>
       <a href="/backtest">Backtest</a>
+      <a href="/lab">Strategy Lab</a>
+      <a href="/latency">Latency</a>
       <a href="/docs">Docs</a>
     </nav>
     <div class="status-bar" style="grid-column: 3; grid-row: 1;">
@@ -43,13 +46,14 @@
       <a href="#npm-scripts">npm scripts</a>
       <h2>Dashboard</h2>
       <a href="#dashboard-pages">Dashboard pages</a>
+      <a href="#strategy-lab">Strategy Lab</a>
       <a href="#paper-trading">Paper trading</a>
       <a href="#strategies">Strategies</a>
       <h2>Feeds</h2>
       <a href="#nats-vs-direct">NATS vs direct</a>
       <a href="#rust-feeds">Rust feeds-rs</a>
       <h2>Backtest</h2>
-      <a href="#backtest">Backtest 5m / 15m</a>
+      <a href="#backtest">Backtest 5m / 15m / 1d</a>
       <h2>Help</h2>
       <a href="#troubleshooting">Troubleshooting</a>
       <a href="#maintenance">Keeping docs updated</a>
@@ -59,7 +63,7 @@
       <section id="overview">
         <h2>Overview</h2>
         <p>
-          This project is a <strong>paper-trading bot</strong> for Polymarket BTC short-window markets (5-minute and 15-minute “up or down” windows).
+          This project is a <strong>paper-trading bot</strong> for Polymarket BTC “up or down” markets (5-minute, 15-minute, and daily windows).
           It streams Binance BTC prices and Polymarket CLOB data, runs signal strategies, and exposes a local dashboard for monitoring and control.
         </p>
         <p>Main components:</p>
@@ -127,8 +131,14 @@ cp .env.example .env</pre>
             <tbody>
               <tr><td><code>PAPER_TRADE</code></td><td><code>true</code></td><td>Bot ignores <code>false</code> — live trading is hard-disabled in <code>bot.js</code>.</td></tr>
               <tr><td><code>STARTING_BANKROLL</code></td><td><code>20</code> (example)</td><td>Initial paper bankroll in USDC (bot/dashboard).</td></tr>
-              <tr><td><code>MARKET_WINDOW</code></td><td><code>15</code></td><td><code>5</code>, <code>15</code>, or <code>both</code> — which BTC short windows to trade/watch.</td></tr>
+              <tr><td><code>SIZING_MODE</code></td><td><code>compound</code></td><td><code>compound</code> (100% bankroll), <code>fixed</code> (<code>FIXED_BET_USD</code>), or <code>kelly</code> (Kelly + caps).</td></tr>
+              <tr><td><code>FIXED_BET_USD</code></td><td><code>5</code></td><td>USDC per entry when <code>SIZING_MODE=fixed</code> (capped at current bankroll).</td></tr>
+              <tr><td><code>KELLY_FRACTION_CAP</code></td><td><code>0.08</code></td><td>Max fraction of bankroll per Kelly entry (8% default, tier multipliers apply below this).</td></tr>
+              <tr><td><code>MARKET_WINDOW</code></td><td><code>15</code></td><td><code>5</code>, <code>15</code>, <code>1d</code>, <code>both</code> (5m+15m), or <code>all</code> (5m+15m+1d).</td></tr>
               <tr><td><code>BOT_STRATEGY</code></td><td><code>deterministic_yes_50</code></td><td>Strategy id when starting bot from CLI or dashboard spawn.</td></tr>
+              <tr><td><code>BOT_MARKET_WINDOW</code></td><td><code>15m</code></td><td>Markets the bot trades: <code>5m</code>, <code>15m</code>, <code>1d</code>, <code>both</code>, or <code>all</code> (Bot page / spawn env).</td></tr>
+              <tr><td><code>BOT_RUN_LIMIT_MODE</code></td><td><code>unlimited</code></td><td><code>trades</code> (stop after N entries) or <code>end_of_day</code> (local midnight).</td></tr>
+              <tr><td><code>BOT_RUN_LIMIT_TRADES</code></td><td><code>11</code></td><td>When mode is <code>trades</code>, number of entries before the bot stops.</td></tr>
             </tbody>
           </table>
         </div>
@@ -167,7 +177,7 @@ cp .env.example .env</pre>
               <tr><td><code>DASHBOARD_PORT</code></td><td><code>3847</code></td><td>HTTP + WebSocket port for the UI.</td></tr>
               <tr><td><code>ENABLE_DASHBOARD_FEED</code></td><td><code>true</code></td><td>Bot POSTs trade events to <code>/api/bot-event</code> when true.</td></tr>
               <tr><td><code>DEBUG_POLY_STREAM</code></td><td>off</td><td>Verbose Polymarket stream logs on the dashboard server.</td></tr>
-              <tr><td><code>DASHBOARD_POLY_MODE</code></td><td>from <code>MARKET_WINDOW</code></td><td>Initial UI window filter: <code>5m</code>, <code>15m</code>, or <code>both</code>.</td></tr>
+              <tr><td><code>DASHBOARD_POLY_MODE</code></td><td>from <code>MARKET_WINDOW</code></td><td>Initial UI window filter: <code>5m</code>, <code>15m</code>, <code>1d</code>, <code>both</code>, or <code>all</code>.</td></tr>
               <tr><td><code>POLY_WS_THROTTLE_MS</code></td><td><code>250</code></td><td>Min interval between WS price broadcasts (dashboard).</td></tr>
             </tbody>
           </table>
@@ -222,6 +232,7 @@ cp .env.example .env</pre>
               <tr><td><code>nats:up</code></td><td><code>docker compose up -d nats</code></td><td>Start NATS on ports <code>4222</code> (client) and <code>8222</code> (monitoring).</td></tr>
               <tr><td><code>nats:down</code></td><td><code>docker compose down</code></td><td>Stop compose stack.</td></tr>
               <tr><td><code>feeds:nats</code></td><td><code>node feeds/natsPublisher.js</code></td><td>Node publisher: Binance + Polymarket → NATS.</td></tr>
+              <tr><td><code>latency:probe</code></td><td><code>node monitoring/latencyProbe.js</code></td><td>CLI probe for Binance/Chainlink stream latency.</td></tr>
               <tr><td><code>check:docs</code></td><td><code>node scripts/check-docs-stale.js</code></td><td>Warn if <code>package.json</code> scripts differ from docs.</td></tr>
             </tbody>
           </table>
@@ -244,21 +255,88 @@ export MARKET_WINDOW=15
             <tbody>
               <tr><td><code>/</code>, <code>/live</code></td><td>Live</td><td>Split view: Polymarket prices/trades + Binance BTC stream; market window selector in header.</td></tr>
               <tr><td><code>/orderbook</code></td><td>Orderbook</td><td>YES/NO bid/ask ladders and depth for the primary active market.</td></tr>
-              <tr><td><code>/bot</code></td><td>Bot</td><td>Start/stop paper bot, pick strategy, view bankroll, logs, and open positions.</td></tr>
-              <tr><td><code>/markets</code></td><td>Markets</td><td>Active BTC 5m/15m markets list from Gamma (filtered by header window mode).</td></tr>
+              <tr><td><code>/bot</code></td><td>Bot</td><td>Start/stop paper bot, pick strategy, view cash, logs, and open positions.</td></tr>
+              <tr><td><code>/portfolio</code></td><td>Portfolio</td><td>Paper cash, open positions, trade history, and PnL (bot + dashboard feed).</td></tr>
+              <tr><td><code>/markets</code></td><td>Markets</td><td>Gamma market explorer: 5m / 15m / 1d tabs, pick any live BTC window market, full detail panel. Selection becomes the primary stream for <code>/live</code> and <code>/orderbook</code>.</td></tr>
+              <tr><td><code>/latency</code></td><td>Latency</td><td>Stream RTT, oracle age, and trade-depth pipeline metrics (SSE + REST).</td></tr>
               <tr><td><code>/backtest</code></td><td>Backtest</td><td>CLI command cheat sheet (results are terminal-only today).</td></tr>
+              <tr><td><code>/lab</code>, <code>/strategy</code></td><td>Strategy Lab</td><td>Live microstructure metrics, no-code gate builder, JS strategy stub export.</td></tr>
               <tr><td><code>/docs</code></td><td>Docs</td><td>This documentation.</td></tr>
             </tbody>
           </table>
         </div>
+        <h3>Markets explorer</h3>
+        <p>
+          On <a href="/markets">/markets</a>, use the <strong>5m · 15m · 1d</strong> tabs to list every live BTC window market from Gamma (30s server cache).
+          Pick a market to open the detail panel (prices, strike, volume, spread, depth, token IDs with copy buttons).
+          That selection is stored in <code>localStorage</code> (<code>dashboardPrimaryMarketId</code>) and synced to the server as the <strong>primary</strong> market for <code>/live</code> and <code>/orderbook</code> WebSocket streams.
+        </p>
+        <p>Example Gamma fields on each market: <code>question</code>, <code>slug</code>, <code>conditionId</code>, <code>clobTokenIds</code> → <code>tokenIdYes</code>/<code>tokenIdNo</code>, <code>endDate</code> → <code>endTime</code>, <code>eventStartTime</code>, <code>windowStartTime</code>, <code>volume24hr</code>, <code>liquidity</code>, <code>outcomePrices</code>, <code>active</code>, <code>closed</code>, plus nested <code>event</code> metadata from the events API.</p>
         <h3>HTTP API (dashboard server)</h3>
         <ul>
           <li><code>GET /api/bot/status</code> — bot state, strategy list</li>
-          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> child process</li>
+          <li><code>POST /api/bot/start</code> / <code>POST /api/bot/stop</code> — spawn/kill <code>bot.js</code> child process (start body may include <code>marketWindow</code> and <code>runLimit</code>)</li>
+          <li><code>GET /api/bot/config</code> / <code>POST /api/bot/config</code> — bot market window + run limit (trades / end of day)</li>
           <li><code>GET /api/bot/strategies</code> / <code>POST /api/bot/strategy</code> — list or set strategy</li>
-          <li><code>GET /api/polymarket/mode</code> / <code>POST /api/polymarket/mode</code> — 5m / 15m / both filter</li>
+          <li><code>GET /api/polymarket/mode</code> / <code>POST /api/polymarket/mode</code> — 5m / 15m / 1d / both / all filter</li>
+          <li><code>GET /api/markets?window=5m|15m|1d</code> — all live BTC markets for that window (Gamma, 30s cache)</li>
+          <li><code>GET /api/markets/:conditionId</code> — full market detail (Gamma + live mid, price-to-beat, microstructure)</li>
+          <li><code>POST /api/markets/select</code> — set primary market for WS streams (<code>{ conditionId }</code>)</li>
+          <li><code>GET /api/markets/selected</code> — current primary market id and cached detail payload</li>
           <li><code>POST /api/bot-event</code> — bot trade events (when not using NATS for events)</li>
+          <li><code>GET /api/lab/params</code> — latest computed microstructure params for primary market</li>
+          <li><code>GET /api/lab/presets</code> — list saved presets + active preset + sizing defaults</li>
+          <li><code>POST /api/lab/preset</code> — save preset (<code>apply: true</code> writes active preset for bot)</li>
+          <li><code>POST /api/lab/preset/apply</code> — apply existing preset by id</li>
+          <li><code>GET /api/bot/sizing</code> — active sizing mode and resolved config</li>
         </ul>
+      </section>
+
+      <section id="strategy-lab">
+        <h2>Strategy Lab</h2>
+        <p>
+          Open <a href="/lab">/lab</a> to explore market microstructure parameters and build entry gates without editing code.
+          Metrics update over WebSocket (<code>source: lab</code>, <code>type: params</code>) on each orderbook poll (~2.5s).
+        </p>
+        <h3>Parameters</h3>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Metric</th><th>Formula</th><th>Default gate</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Bid-ask spread</strong></td><td>best ask − best bid (¢ = ×100)</td><td>Max 5¢ (or edge if strategy provides <code>edgeCents</code>)</td></tr>
+              <tr><td><strong>Market depth</strong></td><td>USDC within N ticks of mid; gate uses <em>weaker side</em> min(bid, ask)</td><td>Min $1,000 weaker-side</td></tr>
+              <tr><td><strong>24h volume</strong></td><td>Gamma <code>volume24hr</code> or sum of trades (data-api fallback)</td><td>Min $0 (optional)</td></tr>
+              <tr><td><strong>Orderbook imbalance</strong></td><td>(bidShares − askShares) / (bid + ask) within N ticks</td><td>|imbalance| ≤ 0.8 (warn)</td></tr>
+              <tr><td><strong>Slippage estimate</strong></td><td>VWAP walk on asks for bet size vs mid (%)</td><td>Max 2%; position ≤ 5% of weaker-side depth</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <h3>Gate modes</h3>
+        <ul>
+          <li><code>LAB_GATE_MODE=off</code> — compute and display only</li>
+          <li><code>warn</code> (default) — log violations, still enter if strategy says yes</li>
+          <li><code>block</code> — skip entry when spread/depth/slippage/liquidity % fail</li>
+        </ul>
+        <h3>Bet sizing</h3>
+        <p>Choose how the paper bot sizes each entry (no-code builder → <strong>Bet sizing</strong> section):</p>
+        <div class="docs-table-wrap">
+          <table class="docs-table">
+            <thead><tr><th>Mode</th><th>Formula</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Compound</strong></td><td><code>betSize = bankroll</code></td><td>Default — full current bankroll (wins/losses compound).</td></tr>
+              <tr><td><strong>Fixed</strong></td><td><code>betSize = min(fixedBetUsd, bankroll)</code></td><td>Flat USDC per trade; set in UI or <code>FIXED_BET_USD</code>.</td></tr>
+              <tr><td><strong>Kelly</strong></td><td>Kelly from edge, R:R, tier fraction; capped by <code>kellyFractionCap × bankroll</code> and 3% of orderbook depth</td><td>Uses <code>risk/manager.js</code> <code>computeBetSize</code>; win rate from Bayesian tracker (prior ~55%).</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>On entry, logs include <code>sizing=&lt;mode&gt;</code> and size, e.g. <code>[PositionOpen] … sizing=fixed | size=$5.00</code>.</p>
+        <h3>Apply preset to bot</h3>
+        <ol>
+          <li>Adjust microstructure sliders and bet sizing on Strategy Lab → <strong>Apply to bot</strong>.</li>
+          <li>Server writes <code>data/strategy-active-preset.json</code> (includes <code>sizingMode</code>, <code>fixedBetUsd</code>, <code>kellyFractionCap</code>).</li>
+          <li><code>bot.js</code> reads the active preset each market check (no restart required).</li>
+        </ol>
+        <p>Presets are stored in <code>data/strategy-presets.json</code>. Env fallbacks: <code>SIZING_MODE</code>, <code>FIXED_BET_USD</code>. Code builder exports a JS stub referencing the <code>params</code> object for custom strategies in <code>signals/strategies_runtime.js</code>.</p>
       </section>
 
       <section id="paper-trading">
@@ -276,10 +354,13 @@ export MARKET_WINDOW=15
 # or with strategy / bankroll:
 BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
         <p>With <code>ENABLE_DASHBOARD_FEED=true</code>, trade events appear on the Bot page while the dashboard is up.</p>
+        <h3>Bot page: markets &amp; run limit</h3>
+        <p>On <strong>Bot</strong>, set <em>Markets to trade</em> (which windows the bot evaluates) and <em>Run until</em> (next N trades or end of day). The header <em>Market window</em> dropdown only filters dashboard feeds; it does not limit the bot unless you match it in Bot controls.</p>
         <h3>Trading windows (bot)</h3>
         <ul>
           <li><strong>5m markets</strong>: trades only when 30–270 seconds remain in the window.</li>
           <li><strong>15m markets</strong>: trades when 60–840 seconds remain.</li>
+          <li><strong>1d markets</strong>: trades when 3,600–82,800 seconds remain (1h after open until 1h before close).</li>
         </ul>
       </section>
 
@@ -296,7 +377,7 @@ BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
             </tbody>
           </table>
         </div>
-        <p>Additional signal logic lives in <code>signals/edgecases.js</code> (tiered edge cases used by the broader signal pipeline).</p>
+        <p>Additional signal logic lives in <code>signals/edgecases.js</code> and <code>signals/edgecases_runtime.js</code> (tiered edge cases; wired when integrated into the bot router).</p>
       </section>
 
       <section id="nats-vs-direct">
@@ -329,24 +410,27 @@ BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
 cargo build --release
 npm run nats:up
 export NATS_URL=nats://127.0.0.1:4222
-export MARKET_WINDOW=15   # or 5, both
+export MARKET_WINDOW=15   # or 5, 1d, both, all
 ./target/release/feeds-rs</pre>
         <p>Subscribe for debugging: <code>nats sub 'feeds.&gt;'</code> (requires NATS CLI). Monitoring UI when using project Docker: <code>http://localhost:8222</code>.</p>
       </section>
 
       <section id="backtest">
-        <h2>Backtest 5m / 15m</h2>
-        <p>The backtest engine loads resolved BTC short-window markets, fetches history (PolyBackTest API with CLOB fallback), and simulates the deterministic YES strategy.</p>
+        <h2>Backtest 5m / 15m / 1d</h2>
+        <p>The backtest engine loads resolved BTC markets, fetches history (PolyBackTest API with CLOB fallback), and simulates the deterministic YES strategy.</p>
         <pre># 15-minute windows (default)
 npm run backtest
 
 # 5-minute windows
 npm run backtest:5m
 
+# 1-day windows
+MARKET_WINDOW=1d npm run backtest
+
 # Custom sample size
 BACKTEST_WINDOWS=100 npm run backtest:5m</pre>
         <p>Output includes win rate, P&amp;L, bankroll curve, and Sharpe ratio in the terminal. The <a href="/backtest">Backtest</a> dashboard page lists these commands but does not run the engine in-browser.</p>
-        <p><code>MARKET_WINDOW=both</code> uses 15m as the primary backtest window when multiple windows are allowed (see <code>getBacktestWindowMinutes()</code> in <code>backtest/engine.js</code>).</p>
+        <p><code>MARKET_WINDOW=both</code> or <code>all</code> uses 15m as the primary backtest window when multiple windows are allowed (see <code>getBacktestWindowMinutes()</code> in <code>backtest/engine.js</code>).</p>
       </section>
 
       <section id="troubleshooting">
@@ -364,8 +448,8 @@ BACKTEST_WINDOWS=100 npm run backtest:5m</pre>
         <p>Start <code>npm run feeds:nats</code> or <code>feeds-rs</code>, or switch to direct mode (<code>USE_NATS_FEEDS=false</code>).</p>
         <h3>WebSocket disconnected</h3>
         <p>Confirm the dashboard is running and you are using the same port in the browser. Check firewall/VPN blocking localhost WS.</p>
-        <h3>No active BTC 5m/15m markets</h3>
-        <p>Markets expire quickly. Try <code>both</code> in the header selector or wait for the next window. Gamma API rate limits: adjust <code>MARKET_SEARCH_PAGES</code> if needed.</p>
+        <h3>No active BTC 5m/15m/1d markets</h3>
+        <p>Short windows expire quickly; daily markets resolve once per day. Try <code>all</code> in the header selector or wait for the next window. Gamma API rate limits: adjust <code>MARKET_SEARCH_PAGES</code> if needed.</p>
         <h3>Backtest: PolyBackTest unavailable</h3>
         <p>The engine falls back to CLOB trade reconstruction automatically; runs may be slower.</p>
         <h3>Bot will not start (409)</h3>

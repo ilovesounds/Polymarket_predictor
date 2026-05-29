@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Latency · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/latency.css" />
+</head>
+<body data-page="latency" class="latency-page">
+  <header class="app-header latency-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Latency</h1>
+        <p class="brand-sub">Stream timing &amp; trade depth</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/latency">Latency</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <span id="latency-updated" class="latency-updated">Waiting for data…</span>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+    </div>
+  </header>
+
+  <main class="latency-main">
+    <section class="latency-hero">
+      <h2>End-to-end stream latency</h2>
+      <p class="latency-lead">Source timestamp → local receive. Rolling window of recent samples with p50 / p95.</p>
+    </section>
+
+    <div class="latency-grid">
+      <section class="latency-card" id="card-btc">
+        <h3>BTC feeds</h3>
+        <div class="metric-rows" id="metrics-btc"></div>
+      </section>
+      <section class="latency-card" id="card-poly">
+        <h3>Polymarket feeds</h3>
+        <div class="metric-rows" id="metrics-poly"></div>
+      </section>
+    </div>
+
+    <section class="latency-card latency-card-wide">
+      <div class="latency-card-head">
+        <h3>Trade → orderbookDepthAtEntry</h3>
+        <p class="latency-card-desc">Time from entry decision to depth fetch completing and populating <code>orderbookDepthAtEntry</code>, plus post-entry depth polls.</p>
+      </div>
+      <div class="trade-summary" id="trade-summary"></div>
+      <div class="trade-events" id="trade-events"></div>
+    </section>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/pages/latency.js"></script>
+</body>
+</html>

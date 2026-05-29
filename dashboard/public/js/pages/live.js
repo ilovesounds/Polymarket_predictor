@@ -151,7 +151,9 @@
     const { yes, no } = D.resolvedPolyPrices();
     if (polyYesPrice) polyYesPrice.textContent = D.fmtPrice(yes, 3);
     if (polyNoPrice) polyNoPrice.textContent = D.fmtPrice(no, 3);
-    const wm = s.primaryPoly?.windowMinutes ? `${s.primaryPoly.windowMinutes}m` : s.selectedPolyMode;
+    const wm = s.primaryPoly?.windowMinutes
+      ? D.formatWindowMinutes(s.primaryPoly.windowMinutes)
+      : s.selectedPolyMode;
     const via = s.lastPolyVia ? ` · ${s.lastPolyVia}` : '';
     const src = s.feedSource ? ` · ${s.feedSource}` : '';
     if (polyMeta) polyMeta.textContent = `${wm}${via}${src} · ${ts}`;

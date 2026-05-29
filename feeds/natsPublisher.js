@@ -10,6 +10,13 @@ const {
   getMidpoint,
   getOrderBook,
 } = require('../api/polymarket_runtime');
+const {
+  normalizePolyMode,
+  modeToWindows,
+  filterLiveMarketsForMode,
+  pickPrimaryLiveMarket,
+  primaryNeedsRoll,
+} = require('../lib/marketSelection');
 const { createNatsBridge } = require('../lib/natsBridge');
 const { SUBJECTS } = require('../lib/nats/subjects');
 const {
@@ -20,43 +27,31 @@ const {
   polymarketTrade,
 } = require('../lib/nats/schemas');
 
-const MARKET_REFRESH_MS = 45_000;
+const MARKET_REFRESH_MS = Number(process.env.MARKET_REFRESH_MS || 45_000);
+const MARKET_ROLL_CHECK_MS = Number(process.env.MARKET_ROLL_CHECK_MS || 5_000);
 const MIDPOINT_FALLBACK_MS = 5_000;
 const ORDERBOOK_POLL_MS = 2_500;
 
 const bridge = createNatsBridge({ name: 'feeds-publisher' });
 const polySubscriptions = new Map();
-let selectedPolyMode = String(process.env.MARKET_WINDOW || process.env.DASHBOARD_POLY_MODE || '15');
+let selectedPolyMode = String(process.env.DASHBOARD_POLY_MODE || '15m');
+let selectedPrimaryMarketId = null;
 let lastMarkets = [];
 let polySubscriptionCycle = 0;
 
-function normalizePolyMode(mode) {
-  const v = String(mode || '').trim().toLowerCase();
-  if (v === '5' || v === '5m') return '5m';
-  if (v === '15' || v === '15m') return '15m';
-  if (v === 'both' || v === 'all' || v === '5,15' || v === '15,5') return 'both';
-  return '15m';
-}
-
-function modeToWindows(mode) {
-  if (mode === '5m') return [5];
-  if (mode === '15m') return [15];
-  return [5, 15];
-}
-
 selectedPolyMode = normalizePolyMode(selectedPolyMode);
 
-function filterAndRankMarkets(markets, mode) {
-  const allowed = modeToWindows(mode);
-  const now = Date.now();
-  const byId = new Map();
-  for (const m of markets || []) {
-    if (!m?.conditionId || !Number.isFinite(m?.endTime)) continue;
-    if (!allowed.includes(m.windowMinutes)) continue;
-    if (m.endTime <= now) continue;
-    byId.set(m.conditionId, m);
-  }
-  return [...byId.values()].sort((a, b) => a.endTime - b.endTime);
+function syncPrimaryMarketId(preferredId = selectedPrimaryMarketId) {
+  lastMarkets = filterLiveMarketsForMode(lastMarkets, selectedPolyMode);
+  const primary = pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, preferredId);
+  if (primary) selectedPrimaryMarketId = primary.conditionId;
+  else selectedPrimaryMarketId = null;
+  return primary;
+}
+
+function getPrimaryMarket() {
+  if (!lastMarkets.length) return null;
+  return pickPrimaryLiveMarket(lastMarkets, selectedPolyMode, selectedPrimaryMarketId);
 }
 
 function closePolySubscriptions() {
@@ -86,7 +81,7 @@ function summarizeBookLevels(levels = [], side = 'bid') {
 }
 
 async function publishOrderbookSnapshot() {
-  const market = lastMarkets[0];
+  const market = getPrimaryMarket();
   if (!market?.tokenIdYes && !market?.tokenIdNo) return;
   const [yesBook, noBook] = await Promise.all([
     market.tokenIdYes ? getOrderBook(market.tokenIdYes).catch(() => null) : Promise.resolve(null),
@@ -119,24 +114,29 @@ async function subscribePolymarketMarkets() {
   let markets;
   try {
     markets = await getActiveBTCShortMarkets(modeToWindows(selectedPolyMode));
-    lastMarkets = filterAndRankMarkets(markets, selectedPolyMode);
+    lastMarkets = filterLiveMarketsForMode(markets, selectedPolyMode);
   } catch (e) {
     console.error('[feeds/nats] markets error:', e.message);
     return;
   }
 
   if (!lastMarkets.length) {
+    selectedPrimaryMarketId = null;
     await bridge.publish(
       SUBJECTS.FEEDS_POLYMARKET_MARKETS,
-      polymarketMarkets({ markets: [], selectedMode: selectedPolyMode, message: 'No active BTC 5m/15m markets' })
+      polymarketMarkets({ markets: [], selectedMode: selectedPolyMode, message: 'No active BTC 5m/15m/1d markets' })
     );
     return;
   }
+
+  const primary = syncPrimaryMarketId();
+  if (!primary) return;
 
   await bridge.publish(
     SUBJECTS.FEEDS_POLYMARKET_MARKETS,
     polymarketMarkets({
       selectedMode: selectedPolyMode,
+      selectedMarketId: selectedPrimaryMarketId,
       markets: lastMarkets.map((m) => ({
         conditionId: m.conditionId,
         question: m.question,
@@ -147,10 +147,9 @@ async function subscribePolymarketMarkets() {
     })
   );
 
-  const primary = lastMarkets[0];
   const emitPrices = async (market, yesP, noP, side, via = 'ws') => {
     if (cycle !== polySubscriptionCycle) return;
-    if (market.conditionId !== primary.conditionId) return;
+    if (market.conditionId !== selectedPrimaryMarketId) return;
     const { yes, no } = pairYesNoPrices(yesP, noP);
     if (yes == null && no == null) return;
     await bridge.publish(
@@ -213,6 +212,14 @@ async function subscribePolymarketMarkets() {
   }
 }
 
+async function maybeRollPrimaryMarket() {
+  const previousId = selectedPrimaryMarketId;
+  const current = lastMarkets.find((m) => m.conditionId === previousId) || getPrimaryMarket();
+  if (!primaryNeedsRoll(current)) return false;
+  await subscribePolymarketMarkets();
+  return Boolean(selectedPrimaryMarketId && selectedPrimaryMarketId !== previousId);
+}
+
 async function main() {
   await bridge.connect();
   console.log(`[feeds/nats] publishing to ${process.env.NATS_URL || 'nats://127.0.0.1:4222'}`);
@@ -224,12 +231,16 @@ async function main() {
   await subscribePolymarketMarkets();
   await publishOrderbookSnapshot();
   setInterval(subscribePolymarketMarkets, MARKET_REFRESH_MS);
+  setInterval(() => {
+    maybeRollPrimaryMarket().catch(() => {});
+  }, MARKET_ROLL_CHECK_MS);
   setInterval(() => publishOrderbookSnapshot().catch(() => {}), ORDERBOOK_POLL_MS);
 
   setInterval(async () => {
     if (!polySubscriptions.size) return;
-    lastMarkets = filterAndRankMarkets(lastMarkets, selectedPolyMode);
-    const market = lastMarkets[0];
+    if (await maybeRollPrimaryMarket()) return;
+    lastMarkets = filterLiveMarketsForMode(lastMarkets, selectedPolyMode);
+    const market = getPrimaryMarket();
     if (!market) return;
     try {
       const [yesPrice, noPrice] = await Promise.all([

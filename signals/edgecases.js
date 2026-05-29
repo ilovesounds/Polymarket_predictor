@@ -3,7 +3,7 @@
  * All 8 edge case detectors.
  */
 
-const { getChainlinkState, getChainlinkAge, getBinanceState, computeDelta } = require('../api/feeds');
+const { getChainlinkState, getChainlinkAge, getBinanceState, computeDelta } = require('../api/feeds_runtime');
 
 function detectMomentumLock({ yesPrice, noPrice, timeRemaining, btcDelta }) {
   if (yesPrice > 0.85 && btcDelta > 0.0006 && timeRemaining > 120) {

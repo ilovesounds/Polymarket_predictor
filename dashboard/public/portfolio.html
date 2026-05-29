@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portfolio · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="portfolio">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Paper portfolio</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/lab">Strategy Lab</a>
+      <a href="/latency">Latency</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <label class="control-group" for="poly-mode-select">
+        <span class="control-label">Market window</span>
+        <select id="poly-mode-select" class="control-input">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="both">both</option>
+        </select>
+      </label>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+      <span id="bot-status" class="pill">Bot idle</span>
+    </div>
+  </header>
+
+  <main class="page-main portfolio-page">
+    <section class="card-panel page-panel portfolio-summary">
+      <div class="portfolio-metrics">
+        <div class="metric-card">
+          <span class="metric-label">Cash</span>
+          <strong id="portfolio-cash" class="bankroll-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Starting cash</span>
+          <strong id="portfolio-starting" class="metric-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Realized PnL</span>
+          <strong id="portfolio-realized" class="metric-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Unrealized PnL</span>
+          <strong id="portfolio-unrealized" class="metric-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Position value</span>
+          <strong id="portfolio-position-value" class="metric-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Portfolio</span>
+          <strong id="portfolio-equity" class="metric-value">$—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">ROI</span>
+          <strong id="portfolio-roi" class="metric-value">—</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Open positions</span>
+          <strong id="portfolio-open-count" class="metric-value">0</strong>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">Mode</span>
+          <strong id="portfolio-mode" class="metric-value">paper</strong>
+        </div>
+      </div>
+      <p class="portfolio-hint">Start the bot from <a href="/bot">Bot</a> to paper trade. Open PnL marks to market on Polymarket price ticks and bot portfolio snapshots.</p>
+    </section>
+
+    <section class="card-panel page-panel portfolio-cash-panel">
+      <div class="panel-head">
+        <h2>Cash adjustments</h2>
+        <span class="panel-meta">Paper mode · persisted in <code>data/cash-adjustments.json</code></span>
+      </div>
+      <p class="portfolio-hint cash-adjust-hint">
+        <code>STARTING_CASH</code> in <code>.env</code> is the initial baseline only.
+        Add or remove liquid cash here; open positions are unchanged.
+        ROI uses <strong>Starting cash</strong> unless you check “Also update ROI baseline” on a deposit.
+      </p>
+      <div class="cash-adjust-form">
+        <label class="control-group" for="portfolio-cash-amount">
+          <span class="control-label">Amount (USD)</span>
+          <input id="portfolio-cash-amount" class="control-input" type="number" min="0.01" step="0.01" placeholder="50" />
+        </label>
+        <div class="btn-row cash-adjust-actions">
+          <button type="button" id="portfolio-cash-add" class="btn btn-primary">Add cash</button>
+          <button type="button" id="portfolio-cash-remove" class="btn btn-danger">Remove cash</button>
+        </div>
+        <label class="control-group cash-adjust-baseline">
+          <input type="checkbox" id="portfolio-cash-update-baseline" />
+          <span>Also update ROI baseline on deposit (treat as new starting capital)</span>
+        </label>
+      </div>
+      <p id="portfolio-cash-status" class="cash-adjust-status" aria-live="polite"></p>
+    </section>
+
+    <section class="card-panel page-panel">
+      <div class="panel-head">
+        <h2>Open positions</h2>
+      </div>
+      <div class="portfolio-table-wrap">
+        <table class="portfolio-table" id="portfolio-positions-table">
+          <thead>
+            <tr>
+              <th>Market</th>
+              <th>Window</th>
+              <th>Side</th>
+              <th>Shares</th>
+              <th>Entry</th>
+              <th>Current</th>
+              <th>Value</th>
+              <th>uPnL</th>
+              <th>uPnL %</th>
+            </tr>
+          </thead>
+          <tbody id="portfolio-positions-body">
+            <tr class="empty-row"><td colspan="9">Loading positions…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card-panel page-panel portfolio-log-section">
+      <div class="panel-head">
+        <h2>Trade history</h2>
+        <span class="panel-meta" id="portfolio-trade-count">0 trades</span>
+      </div>
+      <div class="log portfolio-log-panel" id="portfolio-trade-log"></div>
+    </section>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/cashAdjust.js"></script>
+  <script src="/js/pages/portfolio.js"></script>
+</body>
+</html>

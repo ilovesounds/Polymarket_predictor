@@ -23,7 +23,11 @@ const STARTING_BANKROLL = 5;
 
 function getBacktestWindowMinutes() {
   const allowed = getAllowedWindows();
-  return allowed.length === 1 ? allowed[0] : 15;
+  if (allowed.length === 1) return allowed[0];
+  if (allowed.includes(15)) return 15;
+  if (allowed.includes(5)) return 5;
+  if (allowed.includes(1440)) return 1440;
+  return 15;
 }
 
 function windowDurationMs(windowMinutes) {
@@ -39,7 +43,9 @@ function windowDurationMs(windowMinutes) {
  * Returns array of windows with full price series
  */
 async function fetchPolyBackTestData(limit = 200, windowMinutes = 15) {
-  const type = windowMinutes === 5 ? 'btc-5m' : 'btc-15m';
+  const type = windowMinutes === 5 ? 'btc-5m'
+    : windowMinutes === 1440 ? 'btc-1d'
+    : 'btc-15m';
   try {
     const res = await fetch(
       `${POLYBACKTEST_API}/markets?type=${type}&limit=${limit}`
@@ -104,7 +110,9 @@ async function buildWindowCandles(market, polyBackData, index) {
   const durationMs = windowDurationMs(windowMinutes);
   const windowEndMs = market.endTime;
   const windowStartMs = windowEndMs - durationMs;
-  const bucketMs = windowMinutes <= 5 ? 15_000 : 60_000;
+  const bucketMs = windowMinutes <= 5 ? 15_000
+    : windowMinutes >= 1440 ? 300_000
+    : 60_000;
 
   if (polyBackData?.windows?.[index]?.candles?.length) {
     return polyBackData.windows[index].candles;
@@ -142,9 +150,6 @@ async function buildWindowCandles(market, polyBackData, index) {
  * Buy YES at >= 0.50, stop at 0.45, otherwise hold to resolution.
  */
 function simulateWindow(candles, windowMeta, bankroll, recentResolutions) {
-  // #region agent log
-  fetch('http://127.0.0.1:7837/ingest/d970f366-0641-4e67-8ab4-8e310df24ef3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5a7232'},body:JSON.stringify({sessionId:'5a7232',runId:'pre-fix',hypothesisId:'H4',location:'backtest/engine.js:90',message:'simulateWindow entry',data:{candleCount:candles?.length||0,outcome:windowMeta?.outcome,bankroll},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   const minCandles = 2;
   if (!candles || candles.length < minCandles) return null;
   if (bankroll <= 0) return { signal: null, outcome: windowMeta.outcome, pnl: 0, won: null };
@@ -160,9 +165,6 @@ function simulateWindow(candles, windowMeta, bankroll, recentResolutions) {
   for (let i = 1; i < candles.length; i++) {
     const candle        = candles[i];
     const yesPrice  = candle.close;
-    // #region agent log
-    fetch('http://127.0.0.1:7837/ingest/d970f366-0641-4e67-8ab4-8e310df24ef3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5a7232'},body:JSON.stringify({sessionId:'5a7232',runId:'strategy-yes-50',hypothesisId:'H5',location:'backtest/engine.js:entry',message:'deterministic entry evaluation',data:{yesPrice,threshold:0.5,eligible:yesPrice>=0.5},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
 
     if (yesPrice >= 0.5) {
       entryPrice = yesPrice;
@@ -244,20 +246,15 @@ function simulateWindow(candles, windowMeta, bankroll, recentResolutions) {
 async function runBacktest(numWindows = 200) {
   const windowMinutes = getBacktestWindowMinutes();
   const allowedWindows = getAllowedWindows();
-  // #region agent log
-  fetch('http://127.0.0.1:7837/ingest/d970f366-0641-4e67-8ab4-8e310df24ef3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5a7232'},body:JSON.stringify({sessionId:'5a7232',runId:'pre-fix',hypothesisId:'H2',location:'backtest/engine.js:210',message:'runBacktest start',data:{numWindows,windowMinutes},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   console.log(`\n${'═'.repeat(50)}`);
-  console.log(`  POLYMARKET BTC ${windowMinutes}-MIN BACKTEST ENGINE`);
+  const windowLabel = windowMinutes === 1440 ? '1D' : `${windowMinutes}-MIN`;
+  console.log(`  POLYMARKET BTC ${windowLabel} BACKTEST ENGINE`);
   console.log(`  MARKET_WINDOW=${process.env.MARKET_WINDOW || '15'} (${allowedWindows.join(',')}m)`);
   console.log(`${'═'.repeat(50)}\n`);
 
   // Step 1: Fetch resolved markets
   console.log('[1/4] Fetching resolved BTC markets from Gamma API...');
   const resolvedMarkets = await getRecentResolvedMarkets(numWindows, allowedWindows);
-  // #region agent log
-  fetch('http://127.0.0.1:7837/ingest/d970f366-0641-4e67-8ab4-8e310df24ef3',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'5a7232'},body:JSON.stringify({sessionId:'5a7232',runId:'pre-fix',hypothesisId:'H3',location:'backtest/engine.js:217',message:'resolved markets fetched',data:{count:resolvedMarkets?.length||0},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
   console.log(`      Found ${resolvedMarkets.length} resolved markets\n`);
 
   // Step 2: Try PolyBackTest first, fall back to CLOB trades

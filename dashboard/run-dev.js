@@ -33,5 +33,9 @@ process.on('SIGTERM', shutdown);
 
 run('dashboard', path.join('dashboard', 'server.js'));
 setTimeout(() => {
-  run('bot', 'bot.js', { PAPER_TRADE: 'true', ENABLE_DASHBOARD_FEED: 'true' });
+  run('bot', 'bot.js', {
+    PAPER_TRADE: 'true',
+    ENABLE_DASHBOARD_FEED: 'true',
+    MARKET_WINDOW: process.env.MARKET_WINDOW || 'all',
+  });
 }, 1500);

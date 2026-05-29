@@ -16,11 +16,15 @@ pub struct Config {
     pub metrics_interval_secs: u64,
 }
 
+pub const WINDOW_1D_MINUTES: u32 = 1440;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketWindow {
     Five,
     Fifteen,
+    OneDay,
     Both,
+    All,
 }
 
 impl MarketWindow {
@@ -28,7 +32,9 @@ impl MarketWindow {
         match self {
             MarketWindow::Five => vec![5],
             MarketWindow::Fifteen => vec![15],
+            MarketWindow::OneDay => vec![WINDOW_1D_MINUTES],
             MarketWindow::Both => vec![5, 15],
+            MarketWindow::All => vec![5, 15, WINDOW_1D_MINUTES],
         }
     }
 }
@@ -37,7 +43,9 @@ fn parse_market_window(raw: &str) -> MarketWindow {
     let v = raw.trim().to_lowercase();
     match v.as_str() {
         "5" | "5m" => MarketWindow::Five,
-        "both" | "all" | "5,15" | "15,5" => MarketWindow::Both,
+        "1d" | "1day" | "daily" | "1440" => MarketWindow::OneDay,
+        "both" | "5,15" | "15,5" => MarketWindow::Both,
+        "all" => MarketWindow::All,
         _ => MarketWindow::Fifteen,
     }
 }

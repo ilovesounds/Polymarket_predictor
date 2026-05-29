@@ -15,24 +15,29 @@
       <div class="brand-mark" aria-hidden="true"></div>
       <div>
         <h1>Polymarket BTC</h1>
-        <p class="brand-sub">Active markets</p>
+        <p class="brand-sub">Gamma market explorer</p>
       </div>
     </div>
     <nav class="app-nav" aria-label="Dashboard">
       <a href="/live">Live</a>
       <a href="/orderbook">Orderbook</a>
       <a href="/bot">Bot</a>
+      <a href="/portfolio">Portfolio</a>
       <a href="/markets">Markets</a>
       <a href="/backtest">Backtest</a>
+      <a href="/lab">Strategy Lab</a>
+      <a href="/latency">Latency</a>
       <a href="/docs">Docs</a>
     </nav>
     <div class="top-controls">
       <label class="control-group" for="poly-mode-select">
-        <span class="control-label">Market window</span>
+        <span class="control-label">Live stream window</span>
         <select id="poly-mode-select" class="control-input">
           <option value="5m">5m</option>
           <option value="15m">15m</option>
+          <option value="1d">1d</option>
           <option value="both">both</option>
+          <option value="all">all</option>
         </select>
       </label>
     </div>
@@ -44,16 +49,35 @@
     </div>
   </header>
 
-  <main class="page-main">
+  <main class="page-main markets-page">
     <section class="card-panel page-panel">
       <div class="panel-head">
         <div class="panel-title-block">
-          <h2>BTC short-window markets</h2>
-          <p class="market-title muted-title">5m / 15m windows · time to resolve</p>
+          <h2>BTC window markets</h2>
+          <p class="market-title muted-title">Live Gamma discovery · nearest expiry first</p>
         </div>
         <span class="meta" id="markets-meta">—</span>
       </div>
-      <div class="markets-table" id="markets-table"></div>
+
+      <div class="markets-window-tabs" role="tablist" aria-label="Market window">
+        <button type="button" class="window-tab active" data-window="5m" role="tab" aria-selected="true">5m</button>
+        <button type="button" class="window-tab" data-window="15m" role="tab" aria-selected="false">15m</button>
+        <button type="button" class="window-tab" data-window="1d" role="tab" aria-selected="false">1d</button>
+      </div>
+
+      <div class="markets-layout">
+        <aside class="markets-sidebar">
+          <label class="control-group markets-picker-label" for="markets-select">
+            <span class="control-label">Active markets</span>
+            <select id="markets-select" class="control-input markets-select" size="8"></select>
+          </label>
+          <div class="markets-list" id="markets-list" aria-live="polite"></div>
+        </aside>
+
+        <div class="markets-detail" id="markets-detail">
+          <p class="markets-detail-empty">Select a market to view full Gamma details.</p>
+        </div>
+      </div>
     </section>
   </main>
 

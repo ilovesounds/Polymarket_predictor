@@ -1,10 +1,9 @@
 /**
- * risk/manager.js
- * Kelly sizing, liquidity gating, circuit breaker,
- * Bayesian win rate tracker, hard floor logic
+ * risk/manager.js — reference implementation (documented in /docs).
+ * Runtime imports use risk/manager_runtime.js via lib/betSizing.js.
  */
 
-const HARD_FLOOR          = 5;     // USDC — stop trading if bankroll drops below this
+const HARD_FLOOR          = 5;     // USDC — stop trading if cash drops below this
 const DAILY_LOSS_LIMIT    = 0.15;  // 15% max daily drawdown before pausing
 const FEE_RATE            = 0.02;  // 2% Polymarket standard fee
 const MIN_LIQUIDITY       = 500;   // minimum orderbook depth in USDC to enter
@@ -14,23 +13,23 @@ const MIN_LIQUIDITY       = 500;   // minimum orderbook depth in USDC to enter
 // ─────────────────────────────────────────────
 
 const TIER_KELLY = {
-  1: 0.08,   // Tier 1: 8% of bankroll
-  2: 0.05,   // Tier 2: 5% of bankroll
-  3: 0.03,   // Tier 3: 3% of bankroll
+  1: 0.08,   // Tier 1: 8% of cash
+  2: 0.05,   // Tier 2: 5% of cash
+  3: 0.03,   // Tier 3: 3% of cash
 };
 
 /**
  * Compute Kelly bet size for a given signal
  * Adjusts for actual win probability and R:R ratio
  *
- * @param {number} bankroll    - current USDC balance
+ * @param {number} cash        - liquid USDC available for new positions
  * @param {object} signal      - from detectSignal()
  * @param {number} winRate     - Bayesian estimated win rate (0-1)
  * @param {number} liquidityDepth - available orderbook depth
  * @returns {number} bet size in USDC
  */
-function computeBetSize(bankroll, signal, winRate, liquidityDepth) {
-  if (bankroll <= HARD_FLOOR) return 0;
+function computeBetSize(cash, signal, winRate, liquidityDepth) {
+  if (cash <= HARD_FLOOR) return 0;
 
   // Liquidity gate — never bet more than 3% of available depth
   const liquidityCap = liquidityDepth * 0.03;
@@ -50,7 +49,7 @@ function computeBetSize(bankroll, signal, winRate, liquidityDepth) {
   // Apply tier multiplier (keeps sizing conservative for lower-conviction tiers)
   const tieredKelly = fullKelly * (TIER_KELLY[signal.tier] / 0.08);
 
-  let betSize = bankroll * tieredKelly * (1 - FEE_RATE);
+  let betSize = cash * tieredKelly * (1 - FEE_RATE);
 
   // Apply liquidity cap
   betSize = Math.min(betSize, liquidityCap);
@@ -130,9 +129,9 @@ class BayesianTracker {
 // ─────────────────────────────────────────────
 
 class DailyTracker {
-  constructor(startingBankroll) {
-    this.startOfDay    = startingBankroll;
-    this.currentBankroll = startingBankroll;
+  constructor(startingCash) {
+    this.startOfDay    = startingCash;
+    this.currentCash = startingCash;
     this.dayStart      = this._todayKey();
     this.trades        = [];
     this.paused        = false;
@@ -145,47 +144,47 @@ class DailyTracker {
   /**
    * Reset at midnight UTC
    */
-  checkDayReset(currentBankroll) {
+  checkDayReset(currentCash) {
     const today = this._todayKey();
     if (today !== this.dayStart) {
-      this.startOfDay      = currentBankroll;
+      this.startOfDay      = currentCash;
       this.dayStart        = today;
       this.trades          = [];
       this.paused          = false;
-      console.log(`[Risk] New day — bankroll reset to $${currentBankroll.toFixed(2)}`);
+      console.log(`[Risk] New day — cash reset to $${currentCash.toFixed(2)}`);
     }
   }
 
   /**
    * Record a trade result, check circuit breaker
    */
-  recordTrade(pnl, bankroll) {
-    this.currentBankroll = bankroll;
+  recordTrade(pnl, cash) {
+    this.currentCash = cash;
     this.trades.push({ pnl, timestamp: Date.now() });
 
-    const dailyLoss = (bankroll - this.startOfDay) / this.startOfDay;
+    const dailyLoss = (cash - this.startOfDay) / this.startOfDay;
 
     if (dailyLoss < -DAILY_LOSS_LIMIT) {
       this.paused = true;
       console.warn(`[Risk] CIRCUIT BREAKER — daily loss ${(dailyLoss*100).toFixed(1)}%, pausing until tomorrow`);
     }
 
-    if (bankroll <= HARD_FLOOR) {
+    if (cash <= HARD_FLOOR) {
       this.paused = true;
-      console.warn(`[Risk] HARD FLOOR hit — bankroll $${bankroll.toFixed(2)}, stopping all trading`);
+      console.warn(`[Risk] HARD FLOOR hit — cash $${cash.toFixed(2)}, stopping all trading`);
     }
   }
 
   get canTrade() {
-    return !this.paused && this.currentBankroll > HARD_FLOOR;
+    return !this.paused && this.currentCash > HARD_FLOOR;
   }
 
   get dailyPnL() {
-    return this.currentBankroll - this.startOfDay;
+    return this.currentCash - this.startOfDay;
   }
 
   get dailyPnLPct() {
-    return ((this.currentBankroll - this.startOfDay) / this.startOfDay * 100).toFixed(2);
+    return ((this.currentCash - this.startOfDay) / this.startOfDay * 100).toFixed(2);
   }
 }
 

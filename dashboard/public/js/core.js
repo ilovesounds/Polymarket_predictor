@@ -3,11 +3,18 @@
  */
 (() => {
   const handlers = new Set();
+  const portfolioHandlers = new Set();
   let ws = null;
+  let eventSource = null;
   let reconnectTimer = null;
+  let sseReconnectTimer = null;
+  const marketPrices = new Map();
+
+  const PRIMARY_STORAGE_KEY = 'dashboardPrimaryMarketId';
 
   const state = {
     selectedPolyMode: '15m',
+    selectedMarketId: null,
     selectedStrategy: 'deterministic_yes_50',
     strategies: [],
     feedSource: 'direct',
@@ -15,7 +22,22 @@
     binanceConnected: false,
     polymarketConnected: false,
     natsConnected: false,
-    bot: { running: false, mode: 'paper', bankroll: Number.NaN },
+    bot: { running: false, mode: 'paper', cash: Number.NaN },
+    portfolio: {
+      mode: 'paper',
+      cash: Number.NaN,
+      startingCash: Number.NaN,
+      netCashDelta: 0,
+      envStartingCash: Number.NaN,
+      portfolio: Number.NaN,
+      realizedPnlTotal: 0,
+      openPositions: [],
+      openPositionValue: 0,
+      totalUnrealizedPnl: 0,
+      totalEquity: Number.NaN,
+      roiPct: null,
+      tradeHistory: [],
+    },
     activePolyMarkets: [],
     primaryPoly: null,
     polyLatest: { yes: null, no: null },
@@ -71,7 +93,13 @@
   function modeToWindow(mode) {
     if (mode === '5m') return 5;
     if (mode === '15m') return 15;
+    if (mode === '1d') return 1440;
     return null;
+  }
+
+  function formatWindowMinutes(windowMinutes) {
+    if (windowMinutes === 1440) return '1d';
+    return `${windowMinutes}m`;
   }
 
   function resolvedPolyPrices() {
@@ -80,6 +108,119 @@
     if (Number.isFinite(yes) && !Number.isFinite(no)) no = Math.max(0, Math.min(1, 1 - yes));
     if (Number.isFinite(no) && !Number.isFinite(yes)) yes = Math.max(0, Math.min(1, 1 - no));
     return { yes, no };
+  }
+
+  function positionMarketId(pos) {
+    return pos?.marketId || pos?.conditionId || null;
+  }
+
+  function recordMarketPrices(conditionId, yesPrice, noPrice) {
+    if (!conditionId) return;
+    const cur = marketPrices.get(conditionId) || {};
+    if (Number.isFinite(yesPrice)) cur.yes = yesPrice;
+    if (Number.isFinite(noPrice)) cur.no = noPrice;
+    cur.updatedAt = Date.now();
+    marketPrices.set(conditionId, cur);
+  }
+
+  function markPriceForPosition(pos) {
+    const id = positionMarketId(pos);
+    const side = String(pos?.side || 'YES').toUpperCase();
+    const book = id ? marketPrices.get(id) : null;
+    if (book) {
+      const fromBook = side === 'NO' ? book.no : book.yes;
+      if (Number.isFinite(fromBook)) return fromBook;
+    }
+    if (Number.isFinite(pos?.currentPrice)) return pos.currentPrice;
+    if (Number.isFinite(pos?.entryPrice)) return pos.entryPrice;
+    return null;
+  }
+
+  function resolveShares(pos) {
+    if (Number.isFinite(pos?.shares) && pos.shares > 0) return pos.shares;
+    const entry = pos?.entryPrice;
+    if (Number.isFinite(pos?.costBasis) && Number.isFinite(entry) && entry > 0) {
+      return pos.costBasis / entry;
+    }
+    if (Number.isFinite(pos?.betSize) && Number.isFinite(entry) && entry > 0) {
+      return pos.betSize / entry;
+    }
+    return null;
+  }
+
+  function resolveCostBasis(pos, shares) {
+    if (Number.isFinite(pos?.costBasis)) return pos.costBasis;
+    if (Number.isFinite(pos?.betSize)) return pos.betSize;
+    if (Number.isFinite(shares) && Number.isFinite(pos?.entryPrice)) return shares * pos.entryPrice;
+    return null;
+  }
+
+  function enrichOpenPosition(pos) {
+    const shares = resolveShares(pos);
+    const entryPrice = pos?.entryPrice;
+    const currentPrice = markPriceForPosition(pos);
+    const costBasis = resolveCostBasis(pos, shares);
+    const currentValue = Number.isFinite(shares) && Number.isFinite(currentPrice)
+      ? shares * currentPrice
+      : pos?.currentValue;
+    let unrealizedPnl = null;
+    if (Number.isFinite(currentValue) && Number.isFinite(costBasis)) {
+      unrealizedPnl = currentValue - costBasis;
+    } else if (Number.isFinite(pos?.unrealizedPnl)) {
+      unrealizedPnl = pos.unrealizedPnl;
+    }
+    const unrealizedPnlPct = Number.isFinite(unrealizedPnl) && Number.isFinite(costBasis) && costBasis > 0
+      ? (unrealizedPnl / costBasis) * 100
+      : null;
+    return {
+      ...pos,
+      shares,
+      costBasis,
+      currentPrice,
+      currentValue,
+      unrealizedPnl,
+      unrealizedPnlPct,
+    };
+  }
+
+  function enrichPortfolioInPlace() {
+    const p = state.portfolio;
+    const openPositions = (p.openPositions || []).map(enrichOpenPosition);
+    p.openPositions = openPositions;
+    let openPositionValue = 0;
+    let totalUnrealizedPnl = 0;
+    for (const pos of openPositions) {
+      if (Number.isFinite(pos.currentValue)) openPositionValue += pos.currentValue;
+      if (Number.isFinite(pos.unrealizedPnl)) totalUnrealizedPnl += pos.unrealizedPnl;
+    }
+    p.openPositionValue = openPositionValue;
+    p.totalUnrealizedPnl = totalUnrealizedPnl;
+    p.openPositionCount = openPositions.length;
+    const cash = Number.isFinite(p.cash) ? p.cash : (Number.isFinite(p.bankroll) ? p.bankroll : 0);
+    const starting = Number.isFinite(p.startingCash) ? p.startingCash : p.startingBankroll;
+    p.cash = cash;
+    p.portfolio = cash + openPositionValue;
+    p.totalEquity = p.portfolio;
+    if (Number.isFinite(starting) && starting > 0) {
+      p.roiPct = ((p.portfolio - starting) / starting) * 100;
+    }
+    return p;
+  }
+
+  function emitPortfolioUpdate(reason = 'refresh') {
+    const portfolio = enrichPortfolioInPlace();
+    const payload = {
+      source: 'portfolio',
+      type: 'updated',
+      reason,
+      portfolio,
+      timestamp: Date.now(),
+    };
+    for (const fn of portfolioHandlers) {
+      try { fn(portfolio, payload); } catch (_) {}
+    }
+    emit(payload);
+    return portfolio;
   }
 
   function emit(msg) {
@@ -91,17 +232,24 @@
   function applySystemMessage(msg) {
     if (msg.type === 'hello') {
       if (msg.selectedPolyMode) state.selectedPolyMode = msg.selectedPolyMode;
+      if (msg.selectedMarketId) state.selectedMarketId = msg.selectedMarketId;
       if (msg.selectedStrategy) state.selectedStrategy = msg.selectedStrategy;
       if (Array.isArray(msg.strategies)) state.strategies = msg.strategies;
       if (msg.bot) {
         if (typeof msg.bot.running === 'boolean') state.bot.running = msg.bot.running;
-        if (Number.isFinite(msg.bot.bankroll)) state.bot.bankroll = msg.bot.bankroll;
+        if (Number.isFinite(msg.bot.cash)) state.bot.cash = msg.bot.cash;
+        else if (Number.isFinite(msg.bot.bankroll)) state.bot.cash = msg.bot.bankroll;
         if (msg.bot.strategyId) state.selectedStrategy = msg.bot.strategyId;
+      }
+      if (msg.portfolio) {
+        applyPortfolioSnapshot(msg.portfolio);
+        emitPortfolioUpdate('hello');
       }
       return;
     }
     if (msg.type !== 'status') return;
     if (msg.selectedPolyMode) state.selectedPolyMode = msg.selectedPolyMode;
+    if (msg.selectedMarketId) state.selectedMarketId = msg.selectedMarketId;
     if (msg.selectedStrategy) state.selectedStrategy = msg.selectedStrategy;
     if (Array.isArray(msg.strategies)) state.strategies = msg.strategies;
     if (msg.feedSource) state.feedSource = msg.feedSource;
@@ -112,7 +260,8 @@
     if (msg.bot) {
       if (typeof msg.bot.running === 'boolean') state.bot.running = msg.bot.running;
       if (typeof msg.bot.mode === 'string') state.bot.mode = msg.bot.mode;
-      if (Number.isFinite(msg.bot.bankroll)) state.bot.bankroll = msg.bot.bankroll;
+      if (Number.isFinite(msg.bot.cash)) state.bot.cash = msg.bot.cash;
+      else if (Number.isFinite(msg.bot.bankroll)) state.bot.cash = msg.bot.bankroll;
       if (msg.bot.strategyId) state.selectedStrategy = msg.bot.strategyId;
     }
   }
@@ -124,9 +273,52 @@
     if (Number.isFinite(market.windowStartTime)) state.windowStartTime = market.windowStartTime;
   }
 
+  function pickPrimaryFromMarkets(markets) {
+    const selectedWindow = modeToWindow(state.selectedPolyMode);
+    const now = Date.now();
+    const live = (markets || [])
+      .filter((m) => m?.conditionId && Number.isFinite(m.endTime) && m.endTime > now)
+      .filter((m) => !selectedWindow || m.windowMinutes === selectedWindow)
+      .sort((a, b) => a.endTime - b.endTime);
+    const storedId = state.selectedMarketId || localStorage.getItem(PRIMARY_STORAGE_KEY);
+    if (storedId) {
+      const picked = live.find((m) => m.conditionId === storedId);
+      if (picked) return picked;
+    }
+    return live[0] || null;
+  }
+
+  function setPrimaryMarketLocal(market) {
+    if (!market?.conditionId) return;
+    if (market.conditionId !== state.primaryPoly?.conditionId) {
+      state.polyLatest = { yes: null, no: null };
+      state.priceToBeat = null;
+      state.priceToBeatSource = null;
+      state.windowStartTime = null;
+    }
+    state.selectedMarketId = market.conditionId;
+    localStorage.setItem(PRIMARY_STORAGE_KEY, market.conditionId);
+    state.primaryPoly = market;
+    applyBeatFromMarket(market);
+  }
+
   function applyPolymarketMessage(msg) {
+    if (msg.type === 'market_selected' && msg.market) {
+      setPrimaryMarketLocal(msg.market);
+      return;
+    }
+    if (msg.type === 'market_rolled' && msg.market) {
+      setPrimaryMarketLocal(msg.market);
+      emit({ source: 'system', type: 'market_rolled', ...msg, timestamp: msg.timestamp || Date.now() });
+      return;
+    }
+    if (msg.type === 'market_details' && msg.market?.conditionId === state.selectedMarketId) {
+      setPrimaryMarketLocal({ ...state.primaryPoly, ...msg.market });
+      return;
+    }
     if (msg.type === 'markets' && Array.isArray(msg.markets)) {
-      if (msg.selectedMode) state.selectedPolyMode = msg.selectedMode;
+      if (msg.selectedMode && msg.selectedMode !== state.selectedPolyMode) return;
+      if (msg.selectedMarketId) state.selectedMarketId = msg.selectedMarketId;
       const selectedWindow = modeToWindow(state.selectedPolyMode);
       const now = Date.now();
       const deduped = new Map();
@@ -137,28 +329,34 @@
         deduped.set(m.conditionId, m);
       });
       state.activePolyMarkets = [...deduped.values()].sort((a, b) => a.endTime - b.endTime);
-      const nextPrimary = state.activePolyMarkets[0] || null;
-      if (nextPrimary?.conditionId !== state.primaryPoly?.conditionId) {
-        state.polyLatest = { yes: null, no: null };
-        state.priceToBeat = null;
-        state.priceToBeatSource = null;
-        state.windowStartTime = null;
-      }
-      state.primaryPoly = nextPrimary;
-      applyBeatFromMarket(nextPrimary);
+      const nextPrimary = pickPrimaryFromMarkets(state.activePolyMarkets);
+      setPrimaryMarketLocal(nextPrimary);
       return;
     }
     if (msg.type === 'price') {
+      const conditionId = msg.market?.conditionId;
+      if (conditionId) {
+        recordMarketPrices(conditionId, msg.yesPrice, msg.noPrice);
+      }
+      if (conditionId && (state.portfolio.openPositions || []).some(
+        (pos) => positionMarketId(pos) === conditionId
+      )) {
+        emitPortfolioUpdate('price');
+      }
       const selectedWindow = modeToWindow(state.selectedPolyMode);
-      if (selectedWindow && msg.market?.windowMinutes !== selectedWindow) return;
-      if (msg.market?.selectedMode && msg.market.selectedMode !== state.selectedPolyMode) return;
-      if (state.primaryPoly?.conditionId && msg.market?.conditionId !== state.primaryPoly.conditionId) return;
-      if (Number.isFinite(msg.yesPrice)) state.polyLatest.yes = msg.yesPrice;
-      if (Number.isFinite(msg.noPrice)) state.polyLatest.no = msg.noPrice;
-      if (msg.via) state.lastPolyVia = msg.via;
-      if (msg.market?.question || msg.market?.endTime) {
-        state.primaryPoly = { ...state.primaryPoly, ...msg.market };
-        applyBeatFromMarket(msg.market);
+      const matchesWindow = !selectedWindow || msg.market?.windowMinutes === selectedWindow;
+      const matchesMode = !msg.market?.selectedMode || msg.market.selectedMode === state.selectedPolyMode;
+      if (!matchesWindow || !matchesMode) return;
+      const isPrimary = !state.primaryPoly?.conditionId
+        || conditionId === state.primaryPoly.conditionId;
+      if (isPrimary) {
+        if (Number.isFinite(msg.yesPrice)) state.polyLatest.yes = msg.yesPrice;
+        if (Number.isFinite(msg.noPrice)) state.polyLatest.no = msg.noPrice;
+        if (msg.via) state.lastPolyVia = msg.via;
+        if (msg.market?.question || msg.market?.endTime) {
+          state.primaryPoly = { ...state.primaryPoly, ...msg.market };
+          applyBeatFromMarket(msg.market);
+        }
       }
       return;
     }
@@ -168,14 +366,89 @@
     }
   }
 
+  function applyPortfolioSnapshot(snapshot = {}) {
+    const p = state.portfolio;
+    if (snapshot.mode) p.mode = snapshot.mode;
+    if (Number.isFinite(snapshot.cash)) p.cash = snapshot.cash;
+    else if (Number.isFinite(snapshot.bankroll)) p.cash = snapshot.bankroll;
+    if (Number.isFinite(snapshot.startingCash)) p.startingCash = snapshot.startingCash;
+    else if (Number.isFinite(snapshot.startingBankroll)) p.startingCash = snapshot.startingBankroll;
+    if (Number.isFinite(snapshot.netCashDelta)) p.netCashDelta = snapshot.netCashDelta;
+    if (Number.isFinite(snapshot.envStartingCash)) p.envStartingCash = snapshot.envStartingCash;
+    if (Number.isFinite(snapshot.portfolio)) p.portfolio = snapshot.portfolio;
+    if (Number.isFinite(snapshot.realizedPnlTotal)) p.realizedPnlTotal = snapshot.realizedPnlTotal;
+    if (Array.isArray(snapshot.openPositions)) {
+      p.openPositions = snapshot.openPositions;
+      for (const pos of snapshot.openPositions) {
+        const id = positionMarketId(pos);
+        if (!id || !Number.isFinite(pos.currentPrice)) continue;
+        const side = String(pos.side || 'YES').toUpperCase();
+        recordMarketPrices(
+          id,
+          side === 'NO' ? undefined : pos.currentPrice,
+          side === 'NO' ? pos.currentPrice : undefined,
+        );
+      }
+    }
+    if (Array.isArray(snapshot.tradeHistory)) p.tradeHistory = snapshot.tradeHistory;
+    if (Number.isFinite(snapshot.openPositionValue)) p.openPositionValue = snapshot.openPositionValue;
+    if (Number.isFinite(snapshot.totalUnrealizedPnl)) p.totalUnrealizedPnl = snapshot.totalUnrealizedPnl;
+    if (Number.isFinite(snapshot.totalEquity)) p.totalEquity = snapshot.totalEquity;
+    if (Number.isFinite(snapshot.roiPct)) p.roiPct = snapshot.roiPct;
+    enrichPortfolioInPlace();
+  }
+
   function applyBotMessage(msg) {
     if (msg.type === 'state') {
       if (typeof msg.running === 'boolean') state.bot.running = msg.running;
       if (typeof msg.mode === 'string') state.bot.mode = msg.mode;
-      if (Number.isFinite(msg.bankroll)) state.bot.bankroll = msg.bankroll;
+      if (Number.isFinite(msg.cash)) state.bot.cash = msg.cash;
+      else if (Number.isFinite(msg.bankroll)) state.bot.cash = msg.bankroll;
     }
-    if (Number.isFinite(msg.bankrollAfter)) state.bot.bankroll = msg.bankrollAfter;
-    else if (Number.isFinite(msg.bankrollBefore)) state.bot.bankroll = msg.bankrollBefore;
+    if (Number.isFinite(msg.cashAfter)) state.bot.cash = msg.cashAfter;
+    else if (Number.isFinite(msg.bankrollAfter)) state.bot.cash = msg.bankrollAfter;
+    else if (Number.isFinite(msg.cashBefore)) state.bot.cash = msg.cashBefore;
+    else if (Number.isFinite(msg.bankrollBefore)) state.bot.cash = msg.bankrollBefore;
+
+    if (msg.type === 'portfolio_snapshot') {
+      applyPortfolioSnapshot({
+        mode: msg.mode,
+        cash: msg.cash ?? msg.bankroll,
+        startingCash: msg.startingCash ?? msg.startingBankroll,
+        netCashDelta: msg.netCashDelta,
+        envStartingCash: msg.envStartingCash,
+        portfolio: msg.portfolio ?? msg.totalEquity,
+        realizedPnlTotal: msg.realizedPnlTotal,
+        openPositions: msg.openPositions,
+        openPositionValue: msg.openPositionValue,
+        totalUnrealizedPnl: msg.totalUnrealizedPnl,
+        totalEquity: msg.totalEquity ?? msg.portfolio,
+        roiPct: msg.roiPct,
+      });
+      if (Number.isFinite(msg.cash)) state.portfolio.cash = msg.cash;
+      else if (Number.isFinite(msg.bankroll)) state.portfolio.cash = msg.bankroll;
+      emitPortfolioUpdate('snapshot');
+      return;
+    }
+
+    if (msg.type === 'entry' || msg.type === 'exit') {
+      const entry = {
+        type: msg.type,
+        tradeId: msg.tradeId,
+        logLine: msg.logLine || msg.detail,
+        direction: msg.direction,
+        shares: msg.shares,
+        entryPrice: msg.entryPrice,
+        exitPrice: msg.exitPrice,
+        betSize: msg.betSize,
+        pnl: msg.pnl,
+        question: msg.question,
+        windowLabel: msg.windowLabel,
+        timestamp: msg.timestamp || Date.now(),
+      };
+      state.portfolio.tradeHistory.unshift(entry);
+      emitPortfolioUpdate(msg.type);
+    }
   }
 
   function handleMessage(msg) {
@@ -187,6 +460,25 @@
       if (Number.isFinite(msg.chainlinkPrice)) state.chainlinkSpot = msg.chainlinkPrice;
     }
     emit(msg);
+  }
+
+  function connectEventStream() {
+    if (typeof EventSource === 'undefined') return;
+    if (eventSource && eventSource.readyState !== EventSource.CLOSED) return;
+    eventSource = new EventSource('/api/events/stream');
+    eventSource.onopen = () => emit({ source: 'system', type: 'sse_open', timestamp: Date.now() });
+    eventSource.onmessage = (ev) => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      handleMessage(msg);
+    };
+    eventSource.onerror = () => {
+      emit({ source: 'system', type: 'sse_error', timestamp: Date.now() });
+      eventSource?.close();
+      eventSource = null;
+      clearTimeout(sseReconnectTimer);
+      sseReconnectTimer = setTimeout(connectEventStream, 3000);
+    };
   }
 
   function connect() {
@@ -228,12 +520,44 @@
       ]);
       const storedMode = localStorage.getItem('dashboardPolyMode');
       state.selectedPolyMode = modeResp.selectedPolyMode || botResp.selectedPolyMode || storedMode || state.selectedPolyMode;
+      if (storedMode && storedMode !== state.selectedPolyMode) {
+        try {
+          const sync = await postJson('/api/polymarket/mode', { mode: storedMode });
+          state.selectedPolyMode = sync.selectedPolyMode || storedMode;
+          if (sync.selectedMarketId) {
+            state.selectedMarketId = sync.selectedMarketId;
+            localStorage.setItem(PRIMARY_STORAGE_KEY, sync.selectedMarketId);
+          } else {
+            state.selectedMarketId = null;
+            localStorage.removeItem(PRIMARY_STORAGE_KEY);
+          }
+        } catch (_) {}
+      } else {
+        state.selectedMarketId = modeResp.selectedMarketId || null;
+        if (state.selectedMarketId) {
+          localStorage.setItem(PRIMARY_STORAGE_KEY, state.selectedMarketId);
+        } else {
+          localStorage.removeItem(PRIMARY_STORAGE_KEY);
+        }
+      }
       state.selectedStrategy = botResp.bot?.strategyId || state.selectedStrategy;
       state.strategies = botResp.strategies || [];
       if (botResp.bot) {
         state.bot.running = Boolean(botResp.bot.running);
         state.bot.mode = botResp.bot.mode || 'paper';
-        if (Number.isFinite(botResp.bot.bankroll)) state.bot.bankroll = botResp.bot.bankroll;
+        if (Number.isFinite(botResp.bot.cash)) state.bot.cash = botResp.bot.cash;
+        else if (Number.isFinite(botResp.bot.bankroll)) state.bot.cash = botResp.bot.bankroll;
+        if (botResp.bot.marketWindow) state.bot.marketWindow = botResp.bot.marketWindow;
+        if (botResp.bot.runLimit) state.bot.runLimit = botResp.bot.runLimit;
+      }
+      if (botResp.botSession) {
+        state.bot.marketWindow = botResp.botSession.marketWindow;
+        state.bot.runLimit = botResp.botSession.runLimit;
+      }
+      const portfolioResp = await fetch('/api/portfolio').then((r) => r.json()).catch(() => null);
+      if (portfolioResp) {
+        applyPortfolioSnapshot(portfolioResp);
+        emitPortfolioUpdate('init');
       }
       emit({ source: 'system', type: 'init', timestamp: Date.now() });
     } catch (_) {}
@@ -241,9 +565,40 @@
 
   async function setPolyMode(mode) {
     localStorage.setItem('dashboardPolyMode', mode);
+    localStorage.removeItem(PRIMARY_STORAGE_KEY);
+    state.selectedMarketId = null;
+    state.primaryPoly = null;
+    state.polyLatest = { yes: null, no: null };
+    state.priceToBeat = null;
+    state.priceToBeatSource = null;
+    state.windowStartTime = null;
     const resp = await postJson('/api/polymarket/mode', { mode });
     state.selectedPolyMode = resp.selectedPolyMode || mode;
+    if (resp.selectedMarketId) {
+      state.selectedMarketId = resp.selectedMarketId;
+      localStorage.setItem(PRIMARY_STORAGE_KEY, resp.selectedMarketId);
+    } else {
+      localStorage.removeItem(PRIMARY_STORAGE_KEY);
+    }
     emit({ source: 'system', type: 'mode_changed', selectedPolyMode: state.selectedPolyMode, timestamp: Date.now() });
+    return resp;
+  }
+
+  async function setPrimaryMarket(conditionId) {
+    const id = String(conditionId || '').trim();
+    if (!id) return null;
+    localStorage.setItem(PRIMARY_STORAGE_KEY, id);
+    state.selectedMarketId = id;
+    const resp = await postJson('/api/markets/select', { conditionId: id });
+    if (resp?.market) setPrimaryMarketLocal(resp.market);
+    if (resp?.selectedPolyMode) state.selectedPolyMode = resp.selectedPolyMode;
+    emit({
+      source: 'polymarket',
+      type: 'market_selected',
+      conditionId: id,
+      market: resp?.market,
+      timestamp: Date.now(),
+    });
     return resp;
   }
 
@@ -252,10 +607,23 @@
       handlers.add(fn);
       return () => handlers.delete(fn);
     },
+    subscribePortfolio(fn) {
+      portfolioHandlers.add(fn);
+      return () => portfolioHandlers.delete(fn);
+    },
     getState: () => state,
+    getPortfolio: () => enrichPortfolioInPlace(),
+    applyPortfolioSnapshot,
+    refreshPortfolio: emitPortfolioUpdate,
+    pnlClass(value) {
+      if (!Number.isFinite(value) || value === 0) return '';
+      return value > 0 ? 'pnl-pos' : 'pnl-neg';
+    },
     connect,
+    connectEventStream,
     refreshInitialState,
     setPolyMode,
+    setPrimaryMarket,
     postJson,
     fmtTs,
     fmtPrice,
@@ -264,9 +632,11 @@
     fmtSize,
     fmtCountdown,
     modeToWindow,
+    formatWindowMinutes,
     resolvedPolyPrices,
   };
 
   connect();
+  connectEventStream();
   refreshInitialState();
 })();

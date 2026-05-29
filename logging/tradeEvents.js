@@ -3,6 +3,17 @@
  * Used by both backtest and live/paper bot runners.
  */
 
+const {
+  calcShares,
+  calcCostBasis,
+  calcCurrentValue,
+  calcUnrealizedPnl,
+  formatEntryLog,
+  formatExitLog,
+  summarizeOpenPositions,
+  computePortfolioMetrics,
+} = require('../paper/portfolio');
+
 const VERBOSE_TRADE_LOGS = process.env.VERBOSE_TRADE_LOGS !== 'false';
 const TRADE_LOG_JSON = process.env.TRADE_LOG_JSON !== 'false';
 
@@ -42,14 +53,88 @@ function normalizeTradeEvent(input) {
     target: toNumber(input.target),
     stop: toNumber(input.stop),
     betSize: toNumber(input.betSize, 2),
+    shares: toNumber(input.shares, 4),
+    costBasis: toNumber(input.costBasis, 2),
+    currentPrice: toNumber(input.currentPrice),
+    currentValue: toNumber(input.currentValue, 2),
+    unrealizedPnl: toNumber(input.unrealizedPnl, 4),
+    windowMinutes: input.windowMinutes ?? null,
+    windowLabel: input.windowLabel || null,
+    logLine: input.logLine || null,
     orderbookDepth: toNumber(input.orderbookDepth, 2),
     signalReason: input.signalReason || null,
     exitReason: input.exitReason || null,
     won: typeof input.won === 'boolean' ? input.won : null,
     pnl: toNumber(input.pnl, 4),
-    bankrollBefore: toNumber(input.bankrollBefore, 2),
-    bankrollAfter: toNumber(input.bankrollAfter, 2),
+    cashBefore: toNumber(input.cashBefore ?? input.bankrollBefore, 2),
+    cashAfter: toNumber(input.cashAfter ?? input.bankrollAfter, 2),
+    exitProceeds: toNumber(input.exitProceeds, 2),
   };
+}
+
+function enrichShareFields(event) {
+  const entryPrice = event.entryPrice;
+  const exitPrice = event.exitPrice;
+  const betSize = event.betSize;
+  const priceForShares = event.eventType === 'exit' && Number.isFinite(exitPrice)
+    ? entryPrice
+    : entryPrice;
+  const shares = Number.isFinite(event.shares)
+    ? event.shares
+    : calcShares(betSize, priceForShares);
+  const costBasis = Number.isFinite(event.costBasis)
+    ? event.costBasis
+    : calcCostBasis(shares, entryPrice, betSize);
+  const currentPrice = event.eventType === 'exit'
+    ? exitPrice
+    : (event.currentPrice ?? entryPrice);
+  const currentValue = Number.isFinite(event.currentValue)
+    ? event.currentValue
+    : calcCurrentValue(shares, currentPrice);
+  const unrealizedPnl = event.eventType === 'exit'
+    ? event.pnl
+    : (Number.isFinite(event.unrealizedPnl)
+      ? event.unrealizedPnl
+      : calcUnrealizedPnl(shares, entryPrice, currentPrice, costBasis));
+
+  return {
+    ...event,
+    shares: shares ?? null,
+    costBasis: costBasis ?? null,
+    currentPrice: currentPrice ?? null,
+    currentValue: currentValue ?? null,
+    unrealizedPnl: unrealizedPnl ?? null,
+  };
+}
+
+function formatTradeLogLine(event) {
+  if (event.logLine) return event.logLine;
+  const market = {
+    question: event.question,
+    windowMinutes: event.windowMinutes,
+    windowLabel: event.windowLabel,
+    conditionId: event.marketId,
+  };
+  if (event.eventType === 'entry') {
+    return formatEntryLog({
+      direction: event.direction,
+      shares: event.shares,
+      entryPrice: event.entryPrice,
+      betSize: event.betSize,
+      market,
+    });
+  }
+  if (event.eventType === 'exit') {
+    return formatExitLog({
+      direction: event.direction,
+      shares: event.shares,
+      exitPrice: event.exitPrice,
+      pnl: event.pnl,
+      market,
+      exitReason: event.exitReason,
+    });
+  }
+  return event.signalReason || event.question || event.tradeId || 'trade event';
 }
 
 function formatConciseTradeEvent(event) {
@@ -57,34 +142,50 @@ function formatConciseTradeEvent(event) {
   const ec = event.edgeCase ? `EC${event.edgeCase}` : 'EC?';
   const outcome = event.won === null ? 'OPEN' : event.won ? 'WIN' : 'LOSS';
   const pnlText = event.pnl === null ? 'n/a' : `$${event.pnl.toFixed(2)}`;
+  const sharesText = event.shares === null ? 'n/a' : event.shares.toFixed(2);
   const depthText = event.orderbookDepth === null ? 'n/a' : event.orderbookDepth.toFixed(0);
   const holdText = event.holdSeconds === null ? 'n/a' : `${event.holdSeconds}s`;
-  return `[Trade ${event.eventType || 'event'}] ${event.tradeId || 'n/a'} ${ec} ${side} ${outcome} pnl=${pnlText} depth=${depthText} hold=${holdText}`;
+  return `[Trade ${event.eventType || 'event'}] ${event.tradeId || 'n/a'} ${ec} ${side} ${sharesText}sh ${outcome} pnl=${pnlText} depth=${depthText} hold=${holdText}`;
 }
 
 const USE_NATS = process.env.USE_NATS !== 'false' && process.env.NATS_URL !== 'disabled';
 
 function publishToDashboard(event) {
   if (process.env.ENABLE_DASHBOARD_FEED === 'false') return;
+  const logLine = formatTradeLogLine(event);
   const payload = {
     type: event.eventType,
     eventType: event.eventType,
-    detail: event.signalReason || event.exitReason || event.question,
+    detail: logLine,
+    logLine,
     yesPrice: event.entryPrice ?? event.exitPrice,
+    exitPrice: event.exitPrice,
     marketId: event.marketId,
+    question: event.question,
+    windowMinutes: event.windowMinutes,
+    windowLabel: event.windowLabel,
     direction: event.direction,
+    shares: event.shares,
+    costBasis: event.costBasis,
+    currentPrice: event.currentPrice,
+    currentValue: event.currentValue,
+    unrealizedPnl: event.unrealizedPnl,
+    entryPrice: event.entryPrice,
+    entryTime: event.entryTime,
+    betSize: event.betSize,
     pnl: event.pnl,
     won: event.won,
     mode: event.mode,
-    bankrollBefore: event.bankrollBefore,
-    bankrollAfter: event.bankrollAfter,
+    exitReason: event.exitReason,
+    cashBefore: event.cashBefore,
+    cashAfter: event.cashAfter,
     tradeId: event.tradeId,
+    latencyTiming: event.latencyTiming || null,
   };
   try {
     const { publishDashboardEvent } = require('../dashboard/hub');
     publishDashboardEvent(payload);
   } catch (_) {
-    if (USE_NATS) return;
     const port = process.env.DASHBOARD_PORT || 3847;
     fetch(`http://127.0.0.1:${port}/api/bot-event`, {
       method: 'POST',
@@ -99,12 +200,14 @@ function publishToDashboard(event) {
 }
 
 function emitTradeEvent(eventInput, opts = {}) {
-  const event = normalizeTradeEvent(eventInput);
+  const event = enrichShareFields(normalizeTradeEvent(eventInput));
+  event.logLine = formatTradeLogLine(event);
   const verbose = opts.verbose ?? VERBOSE_TRADE_LOGS;
   const json = opts.json ?? TRADE_LOG_JSON;
 
   if (verbose) {
     console.log(formatConciseTradeEvent(event));
+    console.log(`[TradeLog] ${event.logLine}`);
   }
 
   if (json) {
@@ -116,10 +219,52 @@ function emitTradeEvent(eventInput, opts = {}) {
   return event;
 }
 
+function publishPortfolioSnapshot(snapshot) {
+  if (process.env.ENABLE_DASHBOARD_FEED === 'false') return;
+  const openPositions = Array.isArray(snapshot.openPositions) ? snapshot.openPositions : [];
+  const totals = summarizeOpenPositions(openPositions);
+  const cash = Number.isFinite(snapshot.cash)
+    ? snapshot.cash
+    : (Number.isFinite(snapshot.bankroll) ? snapshot.bankroll : 0);
+  const startingCash = Number.isFinite(snapshot.startingCash)
+    ? snapshot.startingCash
+    : snapshot.startingBankroll;
+  const metrics = computePortfolioMetrics({
+    cash,
+    startingCash,
+    ...totals,
+  });
+  const payload = {
+    type: 'portfolio_snapshot',
+    ...snapshot,
+    ...totals,
+    ...metrics,
+    totalEquity: metrics.portfolio,
+  };
+  try {
+    const { publishDashboardEvent } = require('../dashboard/hub');
+    publishDashboardEvent(payload);
+  } catch (_) {
+    const port = process.env.DASHBOARD_PORT || 3847;
+    fetch(`http://127.0.0.1:${port}/api/bot-event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'bot',
+        timestamp: Date.now(),
+        ...payload,
+      }),
+    }).catch(() => {});
+  }
+}
+
 module.exports = {
   normalizeTradeEvent,
+  enrichShareFields,
+  formatTradeLogLine,
   formatConciseTradeEvent,
   emitTradeEvent,
+  publishPortfolioSnapshot,
   VERBOSE_TRADE_LOGS,
   TRADE_LOG_JSON,
 };

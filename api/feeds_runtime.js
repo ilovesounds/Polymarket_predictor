@@ -4,15 +4,26 @@ const AGGREGATOR_ABI = [
 ];
 
 let chainlinkState = { price: null, updatedAt: null, fetchedAt: null };
-let binanceState = { price: null, updatedAt: null };
+let binanceState = { price: null, updatedAt: null, sourceUpdatedAt: null, latencyMs: null };
 let binanceWs = null;
 
+function recordLatency(streamKey, opts) {
+  try {
+    require('../monitoring/latency').recordStreamLatency(streamKey, opts);
+  } catch (_) {}
+}
+
 async function pollChainlink(provider) {
+  const pollStart = Date.now();
   try {
     const { ethers } = require('ethers');
     const contract = new ethers.Contract(CHAINLINK_AGGREGATOR, AGGREGATOR_ABI, provider);
     const [, answer, , updatedAt] = await contract.latestRoundData();
-    chainlinkState = { price: Number(answer) / 10 ** 8, updatedAt: Number(updatedAt) * 1000, fetchedAt: Date.now() };
+    const fetchedAt = Date.now();
+    const oracleUpdatedAt = Number(updatedAt) * 1000;
+    chainlinkState = { price: Number(answer) / 10 ** 8, updatedAt: oracleUpdatedAt, fetchedAt };
+    recordLatency('chainlink_poll_rtt', { sourceTs: pollStart, receivedTs: fetchedAt });
+    recordLatency('chainlink_oracle_age', { sourceTs: oracleUpdatedAt, receivedTs: fetchedAt });
   } catch (e) {
     console.error('[Chainlink] poll error:', e.message);
   }
@@ -28,9 +39,13 @@ function connectBinanceFeed(onPrice) {
     binanceWs = new WS(WS_URL);
     binanceWs.onmessage = (msg) => {
       const data = JSON.parse(msg.data);
+      const receivedAt = Date.now();
+      const sourceTs = Number(data.T || data.E) || receivedAt;
       const price = parseFloat(data.p);
-      binanceState = { price, updatedAt: Date.now() };
-      if (onPrice) onPrice(price);
+      const latencyMs = receivedAt - sourceTs;
+      binanceState = { price, updatedAt: receivedAt, sourceUpdatedAt: sourceTs, latencyMs };
+      recordLatency('binance_ws', { sourceTs, receivedTs: receivedAt, meta: { price } });
+      if (onPrice) onPrice(price, { sourceTs, receivedAt, latencyMs });
     };
     binanceWs.onerror = (e) => console.error('[Binance WS] error:', e.message);
     binanceWs.onclose = () => setTimeout(connect, 2000);

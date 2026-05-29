@@ -4,8 +4,8 @@ const FEE_RATE = 0.02;
 const MIN_LIQUIDITY = 500;
 const TIER_KELLY = { 1: 0.08, 2: 0.05, 3: 0.03 };
 
-function computeBetSize(bankroll, signal, winRate, liquidityDepth) {
-  if (bankroll <= HARD_FLOOR || liquidityDepth < MIN_LIQUIDITY) return 0;
+function computeBetSize(cash, signal, winRate, liquidityDepth) {
+  if (cash < HARD_FLOOR || liquidityDepth < MIN_LIQUIDITY) return 0;
   const rr = (signal.target - signal.entry) / (signal.entry - signal.stop);
   const winFraction = rr / (rr + 1);
   const lossFraction = 1 / (rr + 1);
@@ -13,7 +13,7 @@ function computeBetSize(bankroll, signal, winRate, liquidityDepth) {
   if (edge <= 0) return 0;
   const fullKelly = edge / winFraction;
   const tieredKelly = fullKelly * (TIER_KELLY[signal.tier] / 0.08);
-  let betSize = bankroll * tieredKelly * (1 - FEE_RATE);
+  let betSize = cash * tieredKelly * (1 - FEE_RATE);
   betSize = Math.min(betSize, liquidityDepth * 0.03);
   if (betSize < 0.5) return 0;
   return parseFloat(betSize.toFixed(2));
@@ -28,11 +28,11 @@ class BayesianTracker {
 }
 
 class DailyTracker {
-  constructor(startingBankroll) { this.startOfDay = startingBankroll; this.currentBankroll = startingBankroll; this.dayStart = new Date().toISOString().slice(0, 10); this.paused = false; }
-  checkDayReset(currentBankroll) { const today = new Date().toISOString().slice(0, 10); if (today !== this.dayStart) { this.startOfDay = currentBankroll; this.currentBankroll = currentBankroll; this.dayStart = today; this.paused = false; } }
-  recordTrade(pnl, bankroll) { this.currentBankroll = bankroll; const dailyLoss = (bankroll - this.startOfDay) / this.startOfDay; if (dailyLoss < -DAILY_LOSS_LIMIT || bankroll <= HARD_FLOOR) this.paused = true; }
-  get canTrade() { return !this.paused && this.currentBankroll > HARD_FLOOR; }
-  get dailyPnLPct() { return ((this.currentBankroll - this.startOfDay) / this.startOfDay * 100).toFixed(2); }
+  constructor(startingCash) { this.startOfDay = startingCash; this.currentCash = startingCash; this.dayStart = new Date().toISOString().slice(0, 10); this.paused = false; }
+  checkDayReset(currentCash) { const today = new Date().toISOString().slice(0, 10); if (today !== this.dayStart) { this.startOfDay = currentCash; this.currentCash = currentCash; this.dayStart = today; this.paused = false; } }
+  recordTrade(pnl, cash) { this.currentCash = cash; const dailyLoss = (cash - this.startOfDay) / this.startOfDay; if (dailyLoss < -DAILY_LOSS_LIMIT || cash <= HARD_FLOOR) this.paused = true; }
+  get canTrade() { return !this.paused && this.currentCash > HARD_FLOOR; }
+  get dailyPnLPct() { return ((this.currentCash - this.startOfDay) / this.startOfDay * 100).toFixed(2); }
 }
 
 function detectRegime(btcPrices) {
@@ -50,4 +50,13 @@ function detectRegime(btcPrices) {
   return 'trending';
 }
 
-module.exports = { computeBetSize, BayesianTracker, DailyTracker, detectRegime };
+module.exports = {
+  computeBetSize,
+  BayesianTracker,
+  DailyTracker,
+  detectRegime,
+  HARD_FLOOR,
+  FEE_RATE,
+  TIER_KELLY,
+  MIN_LIQUIDITY,
+};

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Strategy Lab · Polymarket BTC Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-page="lab">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div>
+        <h1>Polymarket BTC</h1>
+        <p class="brand-sub">Strategy Lab</p>
+      </div>
+    </div>
+    <nav class="app-nav" aria-label="Dashboard">
+      <a href="/live">Live</a>
+      <a href="/orderbook">Orderbook</a>
+      <a href="/bot">Bot</a>
+      <a href="/portfolio">Portfolio</a>
+      <a href="/markets">Markets</a>
+      <a href="/backtest">Backtest</a>
+      <a href="/lab">Strategy Lab</a>
+      <a href="/latency">Latency</a>
+      <a href="/docs">Docs</a>
+    </nav>
+    <div class="top-controls">
+      <label class="control-group" for="poly-mode-select">
+        <span class="control-label">Market window</span>
+        <select id="poly-mode-select" class="control-input">
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1d">1d</option>
+          <option value="both">both</option>
+          <option value="all">all</option>
+        </select>
+      </label>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="pill off">WS disconnected</span>
+      <span id="binance-status" class="pill off">Binance —</span>
+      <span id="poly-status" class="pill off">Polymarket —</span>
+      <span id="bot-status" class="pill">Bot idle</span>
+    </div>
+  </header>
+
+  <main class="page-main lab-main">
+    <section class="card-panel lab-panel">
+      <div class="lab-panel-head">
+        <div>
+          <h2>Live market parameters</h2>
+          <p id="lab-market-label" class="lab-lead">Waiting for primary market…</p>
+        </div>
+        <div class="lab-preset-badge">
+          <span class="mini-label">Active preset</span>
+          <strong id="lab-active-preset">Environment defaults</strong>
+          <span id="lab-gate-mode" class="pill warn">warn</span>
+        </div>
+      </div>
+      <div id="lab-metrics" class="lab-metrics" aria-live="polite"></div>
+      <div id="lab-gate-status" class="lab-gate-status"></div>
+    </section>
+
+    <div class="lab-grid">
+      <section class="card-panel lab-panel">
+        <h2>No-code builder</h2>
+        <p class="lab-lead">Tune microstructure gates. Save locally or apply to the paper bot (reads <code>data/strategy-active-preset.json</code> each cycle).</p>
+        <form id="lab-preset-form" class="lab-form">
+          <label class="lab-field">
+            <span>Preset name</span>
+            <input type="text" id="preset-name" class="control-input" placeholder="My spread filter" />
+          </label>
+          <label class="lab-field">
+            <span>Max spread (¢) <output id="out-max-spread" for="max-spread">5</output></span>
+            <input type="range" id="max-spread" min="1" max="20" step="0.5" value="5" />
+          </label>
+          <label class="lab-field">
+            <span>Min depth ($, weaker side) <output id="out-min-depth" for="min-depth">1000</output></span>
+            <input type="range" id="min-depth" min="100" max="10000" step="100" value="1000" />
+          </label>
+          <label class="lab-field">
+            <span>Min 24h volume ($) <output id="out-min-volume" for="min-volume">0</output></span>
+            <input type="range" id="min-volume" min="0" max="50000" step="500" value="0" />
+          </label>
+          <label class="lab-field">
+            <span>Max |imbalance| <output id="out-max-imbalance" for="max-imbalance">0.8</output></span>
+            <input type="range" id="max-imbalance" min="0.1" max="1" step="0.05" value="0.8" />
+          </label>
+          <label class="lab-field">
+            <span>Max slippage (%) <output id="out-max-slippage" for="max-slippage">2</output></span>
+            <input type="range" id="max-slippage" min="0.1" max="10" step="0.1" value="2" />
+          </label>
+          <label class="lab-field">
+            <span>Max position % of liquidity <output id="out-max-pos-pct" for="max-pos-pct">5</output></span>
+            <input type="range" id="max-pos-pct" min="1" max="25" step="1" value="5" />
+          </label>
+          <label class="lab-field">
+            <span>Gate mode</span>
+            <select id="gate-mode" class="control-input">
+              <option value="off">Off (metrics only)</option>
+              <option value="warn" selected>Warn (log only)</option>
+              <option value="block">Block entries</option>
+            </select>
+          </label>
+
+          <fieldset class="lab-bot-profile-section">
+            <legend class="lab-section-legend">Bot profile</legend>
+            <p class="lab-lead lab-sizing-hint">Strategy, stop-loss, entry window, and per-market trade cap — shared with the <a href="/bot">Bot</a> page.</p>
+            <label class="lab-field">
+              <span>Strategy</span>
+              <select id="lab-strategy-select" class="control-input"></select>
+            </label>
+            <label class="lab-field">
+              <span>Stop loss type</span>
+              <select id="lab-stop-loss-mode" class="control-input">
+                <option value="pct">% drop from entry</option>
+                <option value="price">Fixed YES price</option>
+                <option value="off">Strategy default only</option>
+              </select>
+            </label>
+            <label class="lab-field">
+              <span id="lab-stop-loss-value-label">Stop loss %</span>
+              <div class="bot-slider-row">
+                <input type="range" id="lab-stop-loss-slider" class="bot-range" min="1" max="50" step="1" value="10" />
+                <input id="lab-stop-loss-value" class="control-input bot-stop-input" type="number" min="0" step="0.01" value="10" />
+              </div>
+            </label>
+            <label class="lab-field">
+              <span>Min seconds after open</span>
+              <input id="lab-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
+            </label>
+            <label class="lab-field">
+              <span>Max seconds before end</span>
+              <input id="lab-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default" />
+            </label>
+            <label class="lab-field">
+              <span>Max trades per market</span>
+              <input id="lab-max-trades-market" class="control-input" type="number" min="1" max="100" value="1" />
+            </label>
+          </fieldset>
+
+          <fieldset class="lab-sizing-section">
+            <legend class="lab-section-legend">Bet sizing</legend>
+            <p class="lab-lead lab-sizing-hint">How much USDC to risk per entry (paper bot reads active preset each cycle).</p>
+            <div class="lab-segmented" role="radiogroup" aria-label="Bet sizing mode">
+              <label class="lab-segment">
+                <input type="radio" name="sizing-mode" value="kelly" />
+                <span>Kelly</span>
+              </label>
+              <label class="lab-segment">
+                <input type="radio" name="sizing-mode" value="fixed" />
+                <span>Fixed</span>
+              </label>
+              <label class="lab-segment">
+                <input type="radio" name="sizing-mode" value="compound" checked />
+                <span>Compound</span>
+              </label>
+            </div>
+            <div id="sizing-panel-fixed" class="lab-sizing-panel hidden">
+              <label class="lab-field">
+                <span>Fixed bet (USDC)</span>
+                <input type="number" id="fixed-bet-usd" class="control-input" min="0.5" step="0.5" value="5" />
+              </label>
+            </div>
+            <div id="sizing-panel-kelly" class="lab-sizing-panel hidden">
+              <label class="lab-field">
+                <span>Kelly fraction cap (max % of bankroll) <output id="out-kelly-cap" for="kelly-fraction-cap">8</output>%</span>
+                <input type="range" id="kelly-fraction-cap" min="1" max="15" step="0.5" value="8" />
+              </label>
+              <p class="lab-lead lab-sizing-note">Tier multipliers: Tier 1 = 8%, Tier 2 = 5%, Tier 3 = 3% (from <code>risk/manager.js</code>). Win rate uses Bayesian tracker after trades.</p>
+            </div>
+            <div id="sizing-panel-compound" class="lab-sizing-panel">
+              <p class="lab-lead lab-sizing-note">Uses <strong>100% of current bankroll</strong> each trade (initial + accumulated wins/losses).</p>
+            </div>
+          </fieldset>
+
+          <div class="lab-form-actions">
+            <button type="button" id="btn-save-local" class="btn btn-secondary">Save to browser</button>
+            <button type="button" id="btn-save-server" class="btn btn-secondary">Save preset</button>
+            <button type="button" id="btn-apply-bot" class="btn btn-primary">Apply to bot</button>
+          </div>
+        </form>
+        <div class="lab-saved-presets">
+          <span class="mini-label">Saved presets</span>
+          <ul id="lab-preset-list"></ul>
+        </div>
+        <p id="lab-form-status" class="lab-form-status" role="status"></p>
+      </section>
+
+      <section class="card-panel lab-panel">
+        <h2>Code builder</h2>
+        <p class="lab-lead">
+          JS strategy stub referencing the live <code>params</code> object. Export and wire into
+          <code>signals/strategies_runtime.js</code> when ready.
+          <a href="/docs#strategy-lab">Docs → Strategy Lab</a>
+        </p>
+        <textarea id="lab-code-template" class="lab-code" spellcheck="false" rows="22"></textarea>
+        <div class="lab-form-actions">
+          <button type="button" id="btn-copy-code" class="btn btn-secondary">Copy</button>
+          <button type="button" id="btn-download-code" class="btn btn-secondary">Download .js</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/js/core.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/botProfileUi.js"></script>
+  <script src="/js/pages/lab.js"></script>
+</body>
+</html>
