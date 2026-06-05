@@ -1,9 +1,9 @@
 {
   "profileId": "default",
-  "cash": 7.91,
+  "cash": -35.85,
   "startingCash": 20,
   "netCashDelta": -55.85,
-  "realizedPnlTotal": -12.13,
+  "realizedPnlTotal": 0,
   "openPositions": [],
   "tradeHistory": [
     {
@@ -10007,5 +10007,5 @@
       "timestamp": 1780067803857
     }
   ],
-  "updatedAt": 1780085802561
+  "updatedAt": 1780670352314
 }
