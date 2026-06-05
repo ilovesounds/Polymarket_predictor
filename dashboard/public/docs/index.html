@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/docs/docs.css" />
 </head>
@@ -349,8 +350,8 @@ export MARKET_WINDOW=15
               <tr><td><code>stopLossPct</code></td><td>Exit when YES falls this % below entry</td><td>10% on conservative profile</td></tr>
               <tr><td><code>stopThreshold</code></td><td>Floor when no price/% stop set; also strategy fallback</td><td>0.45</td></tr>
               <tr><td><code>takeProfitPrice</code></td><td>Optional fixed take-profit (sets <code>BOT_TAKE_PROFIT_PRICE</code>)</td><td>none (hold to resolution)</td></tr>
-              <tr><td><code>entryMaxSeconds</code></td><td>Don't enter while <em>more than</em> this many seconds remain (wait for market to mature)</td><td>270</td></tr>
-              <tr><td><code>entryMinSeconds</code></td><td>Don't enter until this many seconds <em>after window open</em> (optional override)</td><td>built-in min 30s left at end</td></tr>
+              <tr><td><code>entryMaxSeconds</code></td><td>Earliest entry timing. Profile stores max seconds remaining (<code>windowTotal − earliestAfterStart</code>); Bot/Lab UI shows earliest after start.</td><td>270 stored → 30s after start on 5m</td></tr>
+              <tr><td><code>entryMinSeconds</code></td><td>Latest entry (sec after market start). Don't enter after this many seconds have elapsed.</td><td>270 on 5m (built-in if unset)</td></tr>
               <tr><td><code>tradesPerMarket</code></td><td><code>single</code> (one open position per market) or <code>multiple</code> (scale-in / re-entry)</td><td><code>single</code></td></tr>
               <tr><td><code>multiEntryMode</code></td><td>When <code>multiple</code>: <code>sequential</code> (one at a time, re-enter after exit) or <code>simultaneous</code> (stack open positions). Env: <code>BOT_MULTI_ENTRY_MODE</code></td><td><code>sequential</code></td></tr>
               <tr><td><code>maxTradesPerMarket</code></td><td>Simultaneous: max concurrent open positions. Sequential: max total entries per market window</td><td>2</td></tr>
@@ -358,7 +359,7 @@ export MARKET_WINDOW=15
             </tbody>
           </table>
         </div>
-        <p>Effective entry band for 5m: <strong>30s &lt; time left &lt; 270s</strong> unless overridden. Bot logs <code>Entry allowed when: …</code> and <code>Stop loss: YES ≤ …</code> at startup; entry skips show the same window in the reason string. With <code>tradesPerMarket=multiple</code>, each entry is a separate position (unique <code>tradeId</code>); portfolio shows one row per position and logs e.g. <code>Bought 2nd YES entry @ …</code>. Use <code>multiEntryMode=simultaneous</code> to stack open positions up to <code>maxTradesPerMarket</code>, or <code>sequential</code> for one-at-a-time re-entry until the per-window entry cap.</p>
+        <p>Effective entry window for 5m: <strong>30–270s after market start</strong> unless overridden. Bot logs <code>Entry window: …</code> and <code>Stop loss: YES ≤ …</code> at startup; entry skips show the same window in the reason string (e.g. <code>outside entry window — need 30–270s after market start (currently 12s after start)</code>). With <code>tradesPerMarket=multiple</code>, each entry is a separate position (unique <code>tradeId</code>); portfolio shows one row per position and logs e.g. <code>Bought 2nd YES entry @ …</code>. Use <code>multiEntryMode=simultaneous</code> to stack open positions up to <code>maxTradesPerMarket</code>, or <code>sequential</code> for one-at-a-time re-entry until the per-window entry cap.</p>
         <h3>Apply preset to bot</h3>
         <ol>
           <li>Adjust microstructure sliders and bet sizing on Strategy Lab → <strong>Apply to bot</strong>.</li>
@@ -394,9 +395,9 @@ BOT_STRATEGY=conservative_yes_55 STARTING_BANKROLL=20 npm run paper:live</pre>
         <p>Settings save to the active named profile and pass to the bot as <code>BOT_RUN_MODE</code>, <code>BOT_RUN_MARKET_LIMIT</code>, and <code>BOT_RUN_TIME_LIMIT_MINUTES</code>. While running, progress appears under the controls (e.g. <code>3/10 markets · 45m remaining</code>) and in <code>GET /api/bot/status</code> as <code>runProgress</code>.</p>
         <h3>Trading windows (bot)</h3>
         <ul>
-          <li><strong>5m markets</strong>: trades only when 30–270 seconds remain (configurable via <code>entryMaxSeconds</code> / <code>entryMinSeconds</code>).</li>
-          <li><strong>15m markets</strong>: trades when 60–840 seconds remain.</li>
-          <li><strong>1d markets</strong>: trades when 3,600–82,800 seconds remain (1h after open until 1h before close).</li>
+          <li><strong>5m markets</strong>: entries between 30s and 270s after market start (configurable via <code>entryMaxSeconds</code> / <code>entryMinSeconds</code> on Bot or Strategy Lab).</li>
+          <li><strong>15m markets</strong>: entries between 60s and 840s after market start.</li>
+          <li><strong>1d markets</strong>: entries between 3,600s and 82,800s after market start (1h after open until 1h before close).</li>
         </ul>
       </section>
 

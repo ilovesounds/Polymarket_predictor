@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-page="portfolio">
@@ -28,48 +29,49 @@
   </header>
 
   <main class="page-main portfolio-page">
-    <section class="card-panel page-panel portfolio-summary">
-      <div class="portfolio-toolbar">
-        <label class="control-group" for="portfolio-profile-select">
+    <section class="card-panel portfolio-hero">
+      <div class="portfolio-hero-top">
+        <label class="control-group portfolio-profile-picker" for="portfolio-profile-select">
           <span class="control-label">Bot profile wallet</span>
           <select id="portfolio-profile-select" class="control-input"></select>
         </label>
+        <p class="portfolio-hint portfolio-hero-hint">Paper wallet per profile. Start the bot from <a href="/bot">Bot</a>.</p>
       </div>
-      <div class="portfolio-metrics">
-        <div class="metric-card">
-          <span class="metric-label">Cash</span>
-          <strong id="portfolio-cash" class="bankroll-value">$—</strong>
+      <div class="portfolio-bankroll-hero">
+        <div class="bankroll-primary">
+          <span class="bankroll-label">Portfolio value</span>
+          <strong id="portfolio-equity" class="bankroll-hero-value">$—</strong>
+          <span id="portfolio-roi" class="bankroll-roi-badge">—</span>
         </div>
-        <div class="metric-card">
+        <div class="bankroll-secondary">
+          <div class="bankroll-stat">
+            <span class="bankroll-stat-label">Cash</span>
+            <strong id="portfolio-cash" class="bankroll-stat-value">$—</strong>
+          </div>
+          <div class="bankroll-stat">
+            <span class="bankroll-stat-label">Position value</span>
+            <strong id="portfolio-position-value" class="bankroll-stat-value">$—</strong>
+          </div>
+          <div class="bankroll-stat">
+            <span class="bankroll-stat-label">Open positions</span>
+            <strong id="portfolio-open-count" class="bankroll-stat-value">0</strong>
+          </div>
+        </div>
+      </div>
+      <div class="portfolio-metrics portfolio-metrics-secondary">
+        <div class="metric-card metric-card-compact">
           <span class="metric-label">Starting cash</span>
           <strong id="portfolio-starting" class="metric-value">$—</strong>
         </div>
-        <div class="metric-card">
+        <div class="metric-card metric-card-compact">
           <span class="metric-label">Realized PnL</span>
           <strong id="portfolio-realized" class="metric-value">$—</strong>
         </div>
-        <div class="metric-card">
+        <div class="metric-card metric-card-compact">
           <span class="metric-label">Unrealized PnL</span>
           <strong id="portfolio-unrealized" class="metric-value">$—</strong>
         </div>
-        <div class="metric-card">
-          <span class="metric-label">Position value</span>
-          <strong id="portfolio-position-value" class="metric-value">$—</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Portfolio</span>
-          <strong id="portfolio-equity" class="metric-value">$—</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">ROI</span>
-          <strong id="portfolio-roi" class="metric-value">—</strong>
-        </div>
-        <div class="metric-card">
-          <span class="metric-label">Open positions</span>
-          <strong id="portfolio-open-count" class="metric-value">0</strong>
-        </div>
       </div>
-      <p class="portfolio-hint">Paper wallet per profile. Start the bot from <a href="/bot">Bot</a>.</p>
     </section>
 
     <section class="card-panel page-panel portfolio-cash-panel">
@@ -95,9 +97,10 @@
       <p id="portfolio-cash-status" class="cash-adjust-status" aria-live="polite"></p>
     </section>
 
-    <section class="card-panel page-panel">
+    <section class="card-panel page-panel portfolio-positions-panel">
       <div class="panel-head">
         <h2>Open positions</h2>
+        <span class="panel-meta" id="portfolio-positions-meta">Paper trading account</span>
       </div>
       <div class="portfolio-table-wrap">
         <table class="portfolio-table" id="portfolio-positions-table">
@@ -106,12 +109,12 @@
               <th>Market</th>
               <th>Window</th>
               <th>Side</th>
-              <th>Shares</th>
-              <th>Entry</th>
-              <th>Current</th>
-              <th>Value</th>
-              <th>uPnL</th>
-              <th>uPnL %</th>
+              <th class="col-num">Shares</th>
+              <th class="col-num">Entry</th>
+              <th class="col-num">Current</th>
+              <th class="col-num">Value</th>
+              <th class="col-num">uPnL</th>
+              <th class="col-num">uPnL %</th>
             </tr>
           </thead>
           <tbody id="portfolio-positions-body">

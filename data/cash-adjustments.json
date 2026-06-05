@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "netCashDelta": 90,
+  "netCashDelta": -55.85,
   "startingCashBaseline": null,
   "entries": [
     {
@@ -15,6 +15,22 @@
       "id": "22d6927e-6a41-4171-92d0-246a17ed7c0c",
       "delta": 80,
       "timestamp": 1780062031364,
+      "updateBaseline": false,
+      "note": null,
+      "appliedAt": null
+    },
+    {
+      "id": "e9f8df92-6ec4-455c-85e8-2ffb3ec30970",
+      "delta": -157.85,
+      "timestamp": 1780080116322,
+      "updateBaseline": false,
+      "note": null,
+      "appliedAt": null
+    },
+    {
+      "id": "66f252f6-edac-4066-be3c-382f91ea8bae",
+      "delta": 12,
+      "timestamp": 1780081554855,
       "updateBaseline": false,
       "note": null,
       "appliedAt": null

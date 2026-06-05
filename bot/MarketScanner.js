@@ -58,7 +58,7 @@ function buildWatchlist(markets, openPositions = {}, allowedWindows = [], entryR
 /**
  * Markets to evaluate each cycle: active window slots + open positions.
  * Unlike buildWatchlist, includes the full live window so EntryCheck runs
- * before the narrow entry-timing band (tte 30–270s on 5m).
+ * before the narrow entry-timing band (30–270s after start on 5m).
  */
 function buildEvalMarkets(markets, openPositions = {}, allowedWindows = []) {
   const { active } = partitionOpenMarkets(markets, allowedWindows);

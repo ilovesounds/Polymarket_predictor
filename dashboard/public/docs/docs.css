@@ -35,15 +35,22 @@
   display: block;
   color: var(--muted);
   text-decoration: none;
-  font-size: 0.8rem;
-  padding: 0.28rem 0.5rem;
+  font-size: var(--text-sm);
+  padding: 0.32rem 0.55rem;
   border-radius: var(--radius-sm);
   margin: 0.05rem 0;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .docs-sidebar a:hover {
   color: var(--text);
   background: var(--panel-hover);
+}
+
+.docs-sidebar a.active {
+  color: var(--nav-active-fg);
+  background: var(--nav-active-bg);
+  font-weight: var(--weight-medium);
 }
 
 .docs-content {
@@ -56,21 +63,23 @@
 }
 
 .docs-content h2 {
-  font-size: 1.35rem;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
   margin: 0 0 0.75rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--border);
+  letter-spacing: -0.02em;
 }
 
 .docs-content h3 {
   font-size: 1rem;
   margin: 1.25rem 0 0.5rem;
-  color: #c7d2e8;
+  color: var(--text);
 }
 
 .docs-content p,
 .docs-content li {
-  color: #c5d0e3;
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
@@ -91,11 +100,11 @@
 .docs-content pre {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: 0.85rem 1rem;
   overflow-x: auto;
   font-family: var(--mono);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 

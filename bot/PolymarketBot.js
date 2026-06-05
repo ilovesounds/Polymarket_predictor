@@ -15,6 +15,8 @@ const {
   pollChainlink,
   connectBinanceFeed,
 } = require('../api/feeds_runtime');
+const { sharedEngine: microstructureEngine } = require('../signals/microstructure');
+const { computeBtcUpPrediction, buildBtcUpModelView, MIN_TRADES_60S } = require('../signals/btcUpModel');
 const { emitTradeEvent, publishPortfolioSnapshot } = require('../logging/tradeEvents');
 const { recordTradeDepthPipeline } = require('../monitoring/latency');
 const { watchPostEntryDepth } = require('../monitoring/tradeDepthWatch');
@@ -40,9 +42,11 @@ const { isTradeLimitReached, runStopMessage, buildRunProgressSnapshot } = requir
 const {
   resolveStopThreshold,
   passesEntryPriceBand,
-  entryWindowLabel,
   entryWindowPreview,
   stopLossPreview,
+  elapsedAfterMarketStart,
+  formatEntryWindowBand,
+  WINDOW_TOTAL_SEC,
 } = require('../lib/botProfile');
 const { loadCashAdjustmentState } = require('../lib/cashAdjustments');
 const { PriceBufferStore, BTC_BUFFER_KEY } = require('../lib/priceRingBuffer');
@@ -131,6 +135,12 @@ class PolymarketBot {
     };
   }
 
+  /** True when Binance aggTrade ingestion is required for entry decisions. */
+  needsMicrostructureFeed() {
+    if (this.config.useMicrostructureModel) return true;
+    return (this.config.strategyIds || []).some((id) => id === 'microstructure_edge');
+  }
+
   async start() {
     await this.setup();
     this.pollTimer = setInterval(() => this.tick(), this.config.pollIntervalMs);
@@ -166,6 +176,14 @@ class PolymarketBot {
     console.log(`  ${stopLossPreview(this.stopProfile, 0.5, this.router?.strategies?.[0]?.stop)}`);
     console.log(`  ${entryWindowPreview(this.entryRules, wm)} (per-window defaults if unset)`);
     console.log(`  Exit: ${exitLabel} | stop=${slParts.join(' ')} | ${this.reEntryModeLabel()}`);
+    if (this.needsMicrostructureFeed()) {
+      const feedPath = this.config.botUseNatsFeeds
+        ? 'NATS price + direct aggTrade sidecar'
+        : 'direct Binance aggTrade WS';
+      console.log(
+        `  Microstructure: ON | edge ≥ ${(this.config.edgeThreshold * 100).toFixed(0)}% | feed=${feedPath}`,
+      );
+    }
     console.log(`  Price path: ${this.config.useWsEval ? `CLOB WS (throttle ${this.config.wsEvalThrottleMs}ms) + ${this.config.pollIntervalMs / 1000}s discovery tick` : `REST poll ${this.config.pollIntervalMs / 1000}s`}`);
     console.log(`${'═'.repeat(50)}\n`);
 
@@ -175,7 +193,11 @@ class PolymarketBot {
 
     if (this.config.botUseNatsFeeds) {
       const feedsOk = await this.startNatsFeeds();
-      if (!feedsOk) this.startDirectBinanceFeed();
+      if (!feedsOk) {
+        this.startDirectBinanceFeed();
+      } else if (this.needsMicrostructureFeed()) {
+        this.startMicrostructureAggTradeFeed();
+      }
     } else {
       this.startDirectBinanceFeed();
     }
@@ -382,7 +404,21 @@ class PolymarketBot {
   startDirectBinanceFeed() {
     connectBinanceFeed((price, timing) => {
       this.appendBtcPrice(price, timing?.sourceTs || Date.now());
+      if (this.needsMicrostructureFeed() && timing?.trade) {
+        microstructureEngine.ingestTrade(timing.trade);
+      }
     });
+    console.log('[Bot] Binance aggTrade feed connected (price + microstructure)');
+  }
+
+  /** Sidecar aggTrade WS when NATS supplies price-only ticks (no m/qty). */
+  startMicrostructureAggTradeFeed() {
+    connectBinanceFeed((_price, timing) => {
+      if (timing?.trade) {
+        microstructureEngine.ingestTrade(timing.trade);
+      }
+    });
+    console.log('[Bot] Binance aggTrade sidecar for microstructure model (NATS price active)');
   }
 
   async startNatsFeeds() {
@@ -541,9 +577,11 @@ class PolymarketBot {
     if (marketKey !== this.lastActiveMarketKey) {
       console.log(`[Cycle] Live market roster updated (${markets.length} active window(s))`);
       markets.forEach((market, idx) => {
-        const secs = Math.max(0, Math.round((market.endTime - Date.now()) / 1000));
+        const secsRemaining = Math.max(0, Math.round((market.endTime - Date.now()) / 1000));
+        const total = WINDOW_TOTAL_SEC[market.windowMinutes] || 300;
+        const elapsed = Math.max(0, total - secsRemaining);
         console.log(
-          `[Cycle]  ${idx + 1}. ${formatWindowLabel(market.windowMinutes)} | ${marketLabel(market)} | tte=${secs}s | ${market.question}`
+          `[Cycle]  ${idx + 1}. ${formatWindowLabel(market.windowMinutes)} | ${marketLabel(market)} | ${elapsed}s after start | ${market.question}`
         );
       });
       this.lastActiveMarketKey = marketKey;
@@ -793,6 +831,26 @@ class PolymarketBot {
       const activePreset = getActivePreset();
       const sizingConfig = resolveSizingConfig(activePreset);
 
+      let btcUpModel = null;
+      if (this.needsMicrostructureFeed()) {
+        const snap = microstructureEngine.getSnapshot();
+        const pred = computeBtcUpPrediction(snap, {
+          edgeThreshold: this.config.edgeThreshold,
+        });
+        btcUpModel = buildBtcUpModelView(pred, yesPrice);
+        if (this.shouldLogEntryCheck(market.conditionId, `btcup|${btcUpModel.pUp}|${yesPrice}|${btcUpModel.edge}|${btcUpModel.ready}`)) {
+          const pPct = (btcUpModel.pUp * 100).toFixed(0);
+          const yPct = Number.isFinite(yesPrice) ? (yesPrice * 100).toFixed(0) : 'n/a';
+          const edgeStr = Number.isFinite(btcUpModel.edgePct)
+            ? `${btcUpModel.edgePct >= 0 ? '+' : ''}${btcUpModel.edgePct.toFixed(0)}`
+            : 'n/a';
+          const readyTag = btcUpModel.ready ? 'ready' : `cold (${btcUpModel.signals?.tradeCount60s ?? 0}/${MIN_TRADES_60S} trades)`;
+          console.log(
+            `[BtcUpModel] ${marketLabel(market)} | P(up)=${pPct}% | Poly YES=${yPct}% | edge=${edgeStr}% | ${readyTag}`,
+          );
+        }
+      }
+
       const routeResult = this.router.evaluate({
         market,
         yesPrice,
@@ -800,6 +858,8 @@ class PolymarketBot {
         cash: this.cash,
         btcPriceHistory: this.getBtcPriceHistory(),
         enriched,
+        btcUpModel,
+        edgeThreshold: this.config.edgeThreshold,
       });
       const { strategy, decision, strategyId: chosenStrategyId } = routeResult;
       this.strategyId = chosenStrategyId;
@@ -868,21 +928,30 @@ class PolymarketBot {
         } catch (_) {}
       }
       if (!entryEligible) {
+        let skipDetail = decision?.reason || 'entryEligible=false';
+        if (chosenStrategyId === 'microstructure_edge' && btcUpModel) {
+          if (btcUpModel.coldStart) {
+            skipDetail += ` | model cold start (${btcUpModel.signals?.tradeCount60s ?? 0}/${MIN_TRADES_60S} aggTrades in 60s — need Binance aggTrade feed)`;
+          } else if (btcUpModel.ready && !btcUpModel.entrySignal) {
+            skipDetail += ` | edge below threshold (need ≥${(this.config.edgeThreshold * 100).toFixed(0)}%)`;
+          }
+        }
         this.logEntrySkip(
           market,
-          `strategy not met: ${decision?.reason || 'entryEligible=false'} (yes=${fmtPrice(yesPrice)})`,
+          `strategy not met: ${skipDetail} (yes=${fmtPrice(yesPrice)})`,
           `${market.conditionId}:strategy`
         );
         return;
       }
 
       if (!inEntryBand) {
-        const band = entryWindowLabel(this.entryRules, market.windowMinutes);
-        const skipReason = `strategy met but timeRemaining ${Math.round(timeRemaining)}s outside entry window (${formatWindowLabel(market.windowMinutes)}; ${band})`;
+        const band = formatEntryWindowBand(market.windowMinutes, this.entryRules);
+        const elapsed = elapsedAfterMarketStart(market.windowMinutes, timeRemaining);
+        const skipReason = `outside entry window — need ${band} (currently ${elapsed}s after start)`;
         if (logEntryCheck) {
           this.logImmediateEntrySkip(market, skipReason);
         } else {
-          this.logEntrySkip(market, skipReason, `${market.conditionId}:tte`);
+          this.logEntrySkip(market, skipReason, `${market.conditionId}:entry_window`);
         }
         return;
       }

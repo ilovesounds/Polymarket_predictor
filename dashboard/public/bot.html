@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-page="bot">
@@ -28,21 +29,29 @@
   </header>
 
   <main class="page-main bot-page">
-    <section class="card-panel page-panel bot-controls-panel">
-      <h2>Bot</h2>
-      <div class="bot-controls-grid">
-        <label class="control-group" for="bot-profile-select">
-          <span class="control-label">Profile</span>
-          <select id="bot-profile-select" class="control-input"></select>
-        </label>
-        <label class="control-group" for="bot-strategy-select">
-          <span class="control-label">Strategy</span>
-          <select id="bot-strategy-select" class="control-input"></select>
-        </label>
-      </div>
-      <div class="bot-profile-section">
-        <h3 class="bot-subsection-title">Run duration</h3>
-        <p class="bot-profile-hint">Stop automatically after a market-entry count or elapsed time. Counts <strong>entries</strong> (positions opened), not exits.</p>
+    <div class="bot-layout">
+      <section class="card-panel bot-card bot-card-profile">
+        <header class="bot-card-head">
+          <h2>Profile &amp; strategy</h2>
+          <p class="bot-card-desc">Select a saved profile and trading strategy.</p>
+        </header>
+        <div class="bot-controls-grid">
+          <label class="control-group" for="bot-profile-select">
+            <span class="control-label">Profile</span>
+            <select id="bot-profile-select" class="control-input"></select>
+          </label>
+          <label class="control-group" for="bot-strategy-select">
+            <span class="control-label">Strategy</span>
+            <select id="bot-strategy-select" class="control-input"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card-panel bot-card bot-card-run">
+        <header class="bot-card-head">
+          <h2>Run duration</h2>
+          <p class="bot-card-desc">Stop automatically after a market-entry count or elapsed time. Counts <strong>entries</strong> (positions opened), not exits.</p>
+        </header>
         <div class="lab-segmented bot-run-mode" role="radiogroup" aria-label="Run duration mode">
           <label class="lab-segment">
             <input type="radio" name="bot-run-mode" value="indefinite" checked />
@@ -71,10 +80,14 @@
             <input id="bot-run-until" class="control-input" type="datetime-local" step="60" />
           </label>
         </div>
-        <p id="bot-run-status" class="bot-profile-hint" aria-live="polite"></p>
-      </div>
-      <div class="bot-profile-section">
-        <p class="bot-profile-hint">Also editable in <a href="/lab">Strategy Lab</a>. Saved with the active profile on Start.</p>
+        <p id="bot-run-status" class="bot-profile-hint bot-run-status" aria-live="polite"></p>
+      </section>
+
+      <section class="card-panel bot-card bot-card-trading">
+        <header class="bot-card-head">
+          <h2>Trading rules</h2>
+          <p class="bot-card-desc">Also editable in <a href="/lab">Strategy Lab</a>. Saved with the active profile on Start.</p>
+        </header>
         <div class="bot-controls-grid">
           <label class="control-group" for="bot-stop-loss-mode">
             <span class="control-label">Stop loss type</span>
@@ -96,12 +109,12 @@
             <input id="bot-take-profit-price" class="control-input" type="number" min="0.51" max="0.99" step="0.01" placeholder="none" />
           </label>
           <label class="control-group" for="bot-entry-max-seconds">
-            <span class="control-label">Don't enter while more than __ s remain</span>
-            <input id="bot-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default (e.g. 270 on 5m)" />
+            <span class="control-label">Earliest entry (sec after start)</span>
+            <input id="bot-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default 30 on 5m" />
           </label>
           <label class="control-group" for="bot-entry-min-seconds">
-            <span class="control-label">Don't enter until __ s after window opens</span>
-            <input id="bot-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default min time left" />
+            <span class="control-label">Latest entry (sec after start)</span>
+            <input id="bot-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default 270 on 5m" />
           </label>
           <label class="control-group" for="bot-trades-per-market">
             <span class="control-label">Entries per market</span>
@@ -133,10 +146,14 @@
             <input id="bot-min-entry-cooldown" class="control-input" type="number" min="0" step="1" placeholder="0" />
           </label>
         </div>
-        <p id="bot-trading-preview" class="bot-profile-hint" aria-live="polite"></p>
-      </div>
-      <div class="bot-profile-section">
-        <h3 class="bot-subsection-title">Bet sizing</h3>
+        <p id="bot-trading-preview" class="bot-profile-hint bot-preview-line" aria-live="polite"></p>
+      </section>
+
+      <section class="card-panel bot-card bot-card-sizing">
+        <header class="bot-card-head">
+          <h2>Bet sizing</h2>
+          <p class="bot-card-desc">How much USDC to risk per entry.</p>
+        </header>
         <div class="lab-segmented bot-sizing-modes" role="radiogroup" aria-label="Bet sizing mode">
           <label class="lab-segment">
             <input type="radio" name="bot-sizing-mode" value="kelly" />
@@ -178,24 +195,29 @@
             </label>
           </div>
         </div>
-        <p id="bot-sizing-preview" class="bot-profile-hint" aria-live="polite"></p>
-      </div>
-      <div class="bot-controls-grid bot-actions-row">
-        <div class="control-group">
-          <div class="btn-row">
-            <button id="bot-start-btn" type="button" class="btn btn-primary">Start</button>
-            <button id="bot-stop-btn" type="button" class="btn btn-danger">Stop</button>
-          </div>
-        </div>
-      </div>
-    </section>
+        <p id="bot-sizing-preview" class="bot-profile-hint bot-preview-line" aria-live="polite"></p>
+      </section>
 
-    <section class="card-panel page-panel bot-log-section">
-      <div class="panel-head">
-        <h2>Logs</h2>
-      </div>
-      <div class="log bot-log-panel" id="bot-log"></div>
-    </section>
+      <section class="card-panel bot-card bot-card-actions">
+        <header class="bot-card-head bot-card-head-inline">
+          <div>
+            <h2>Run controls</h2>
+            <p class="bot-card-desc">Start saves profile settings then launches the bot.</p>
+          </div>
+          <div class="btn-row bot-run-buttons">
+            <button id="bot-start-btn" type="button" class="btn btn-primary btn-lg">Start</button>
+            <button id="bot-stop-btn" type="button" class="btn btn-danger btn-lg">Stop</button>
+          </div>
+        </header>
+      </section>
+
+      <section class="card-panel bot-log-section bot-card-full">
+        <div class="panel-head">
+          <h2>Logs</h2>
+        </div>
+        <div class="log bot-log-panel" id="bot-log"></div>
+      </section>
+    </div>
   </main>
 
   <script src="/js/core.js"></script>

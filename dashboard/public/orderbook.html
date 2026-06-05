@@ -7,9 +7,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
-<body data-page="orderbook">
+<body data-page="orderbook" class="orderbook-page">
   <header class="app-header">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true"></div>
@@ -47,45 +48,71 @@
           <p class="market-title" id="poly-market-title">Waiting for market…</p>
         </div>
         <div class="panel-head-meta">
-          <span id="poly-resolution" class="resolution-pill" hidden>—</span>
+          <span id="poly-resolution" class="live-countdown resolution-pill" hidden>—</span>
           <span class="meta" id="ob-updated">—</span>
         </div>
       </div>
 
       <div class="orderbook-full-grid">
-        <article class="book-side-card">
-          <h3 class="book-side-title outcome-yes-title">YES</h3>
+        <article class="book-side-card book-side-yes">
+          <header class="book-side-head">
+            <h3 class="book-side-title outcome-yes-title">Yes</h3>
+            <span class="book-side-badge">Outcome</span>
+          </header>
+          <div class="book-spread-bar" id="ob-yes-spread-wrap">
+            <span class="book-spread-label">Spread</span>
+            <strong class="book-spread-value num" id="ob-yes-spread">—</strong>
+          </div>
           <div class="book-summary">
-            <div class="book-row"><span>Best bid</span><strong id="ob-yes-best-bid">—</strong></div>
-            <div class="book-row"><span>Best ask</span><strong id="ob-yes-best-ask">—</strong></div>
-            <div class="book-row"><span>Top5 depth</span><strong id="ob-yes-depth">—</strong></div>
+            <div class="book-row book-row-bid"><span>Best bid</span><strong class="num bid-px" id="ob-yes-best-bid">—</strong></div>
+            <div class="book-row book-row-ask"><span>Best ask</span><strong class="num ask-px" id="ob-yes-best-ask">—</strong></div>
+            <div class="book-row"><span>Top 5 depth</span><strong class="num" id="ob-yes-depth">—</strong></div>
           </div>
           <div class="ladder-columns">
-            <div>
-              <div class="mini-label">Bids</div>
-              <div class="ladder ladder-tall" id="ob-yes-bid-ladder"></div>
+            <div class="ladder-col">
+              <div class="ladder-col-head ladder-col-bid">
+                <span class="mini-label">Bids</span>
+                <span class="ladder-col-hint">Price · Size</span>
+              </div>
+              <div class="ladder ladder-tall ladder-depth" id="ob-yes-bid-ladder"></div>
             </div>
-            <div>
-              <div class="mini-label">Asks</div>
-              <div class="ladder ladder-tall" id="ob-yes-ask-ladder"></div>
+            <div class="ladder-col">
+              <div class="ladder-col-head ladder-col-ask">
+                <span class="mini-label">Asks</span>
+                <span class="ladder-col-hint">Price · Size</span>
+              </div>
+              <div class="ladder ladder-tall ladder-depth" id="ob-yes-ask-ladder"></div>
             </div>
           </div>
         </article>
-        <article class="book-side-card">
-          <h3 class="book-side-title outcome-no-title">NO</h3>
+        <article class="book-side-card book-side-no">
+          <header class="book-side-head">
+            <h3 class="book-side-title outcome-no-title">No</h3>
+            <span class="book-side-badge">Outcome</span>
+          </header>
+          <div class="book-spread-bar" id="ob-no-spread-wrap">
+            <span class="book-spread-label">Spread</span>
+            <strong class="book-spread-value num" id="ob-no-spread">—</strong>
+          </div>
           <div class="book-summary">
-            <div class="book-row"><span>Best bid</span><strong id="ob-no-best-bid">—</strong></div>
-            <div class="book-row"><span>Best ask</span><strong id="ob-no-best-ask">—</strong></div>
-            <div class="book-row"><span>Top5 depth</span><strong id="ob-no-depth">—</strong></div>
+            <div class="book-row book-row-bid"><span>Best bid</span><strong class="num bid-px" id="ob-no-best-bid">—</strong></div>
+            <div class="book-row book-row-ask"><span>Best ask</span><strong class="num ask-px" id="ob-no-best-ask">—</strong></div>
+            <div class="book-row"><span>Top 5 depth</span><strong class="num" id="ob-no-depth">—</strong></div>
           </div>
           <div class="ladder-columns">
-            <div>
-              <div class="mini-label">Bids</div>
-              <div class="ladder ladder-tall" id="ob-no-bid-ladder"></div>
+            <div class="ladder-col">
+              <div class="ladder-col-head ladder-col-bid">
+                <span class="mini-label">Bids</span>
+                <span class="ladder-col-hint">Price · Size</span>
+              </div>
+              <div class="ladder ladder-tall ladder-depth" id="ob-no-bid-ladder"></div>
             </div>
-            <div>
-              <div class="mini-label">Asks</div>
-              <div class="ladder ladder-tall" id="ob-no-ask-ladder"></div>
+            <div class="ladder-col">
+              <div class="ladder-col-head ladder-col-ask">
+                <span class="mini-label">Asks</span>
+                <span class="ladder-col-hint">Price · Size</span>
+              </div>
+              <div class="ladder ladder-tall ladder-depth" id="ob-no-ask-ladder"></div>
             </div>
           </div>
         </article>

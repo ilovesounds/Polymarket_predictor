@@ -13,6 +13,8 @@ const STRATEGY_ALIASES = {
   kelly: 'deterministic_yes_50',
   deterministic: 'deterministic_yes_50',
   conservative: 'conservative_yes_55',
+  microstructure_edge: 'microstructure_edge',
+  microstructure: 'microstructure_edge',
 };
 
 function resolveStrategyId(raw) {
@@ -64,7 +66,7 @@ class StrategyRouter {
   }
 
   /**
-   * @param {object} ctx — market, yesPrice, liquidityDepth, cash, btcPriceHistory, enriched
+   * @param {object} ctx — market, yesPrice, liquidityDepth, cash, btcPriceHistory, enriched, btcUpModel, edgeThreshold
    * @returns {{ strategy, decision, strategyId: string } | null}
    */
   evaluate(ctx) {

@@ -151,10 +151,22 @@
       const rem = Number.isFinite(m.endTime) ? m.endTime - now : NaN;
       const cd = Number.isFinite(rem) && rem > 0 ? D.fmtCountdown(rem) : 'resolved';
       const primary = m.conditionId === selectedId;
-      return `<button type="button" class="market-pick${primary ? ' primary' : ''}" data-id="${m.conditionId}">
-        ${primary ? '<span class="live-tag">PRIMARY</span>' : ''}
-        <span class="market-pick-cd">${cd}</span>
-        <span class="market-pick-q">${(m.question || '').slice(0, 90)}</span>
+      const yes = m.outcomePrices?.[0];
+      const no = m.outcomePrices?.[1];
+      const vol = Number.isFinite(m.volume24h) ? D.fmtDollars(m.volume24h) : '—';
+      const wm = D.formatWindowMinutes?.(m.windowMinutes) || `${m.windowMinutes || '?'}m`;
+      return `<button type="button" class="market-pick market-card-row${primary ? ' primary' : ''}" data-id="${m.conditionId}">
+        <div class="market-card-top">
+          <span class="market-window-tag">${wm}</span>
+          ${primary ? '<span class="live-tag">PRIMARY</span>' : ''}
+          <span class="market-pick-cd">${cd}</span>
+          <span class="market-pick-vol num">${vol}</span>
+        </div>
+        <span class="market-pick-q">${(m.question || m.conditionId || '').slice(0, 100)}</span>
+        <div class="market-pick-odds">
+          <span class="pick-yes"><span class="pick-label">Yes</span><strong class="num">${D.fmtPrice(yes, 3)}</strong></span>
+          <span class="pick-no"><span class="pick-label">No</span><strong class="num">${D.fmtPrice(no, 3)}</strong></span>
+        </div>
       </button>`;
     }).join('');
 

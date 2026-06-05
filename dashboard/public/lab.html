@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-page="lab">
@@ -40,7 +41,7 @@
   </header>
 
   <main class="page-main lab-main">
-    <section class="card-panel lab-panel">
+    <section class="card-panel lab-panel lab-live-panel">
       <div class="lab-panel-head">
         <div>
           <h2>Live market parameters</h2>
@@ -61,45 +62,52 @@
         <h2>No-code builder</h2>
         <p class="lab-lead">Tune microstructure gates. Save locally or apply to the paper bot (reads <code>data/strategy-active-preset.json</code> each cycle).</p>
         <form id="lab-preset-form" class="lab-form">
-          <label class="lab-field">
-            <span>Preset name</span>
-            <input type="text" id="preset-name" class="control-input" placeholder="My spread filter" />
-          </label>
-          <label class="lab-field">
-            <span>Max spread (¢) <output id="out-max-spread" for="max-spread">5</output></span>
-            <input type="range" id="max-spread" min="1" max="20" step="0.5" value="5" />
-          </label>
-          <label class="lab-field">
-            <span>Min depth ($, weaker side) <output id="out-min-depth" for="min-depth">1000</output></span>
-            <input type="range" id="min-depth" min="100" max="10000" step="100" value="1000" />
-          </label>
-          <label class="lab-field">
-            <span>Min 24h volume ($) <output id="out-min-volume" for="min-volume">0</output></span>
-            <input type="range" id="min-volume" min="0" max="50000" step="500" value="0" />
-          </label>
-          <label class="lab-field">
-            <span>Max |imbalance| <output id="out-max-imbalance" for="max-imbalance">0.8</output></span>
-            <input type="range" id="max-imbalance" min="0.1" max="1" step="0.05" value="0.8" />
-          </label>
-          <label class="lab-field">
-            <span>Max slippage (%) <output id="out-max-slippage" for="max-slippage">2</output></span>
-            <input type="range" id="max-slippage" min="0.1" max="10" step="0.1" value="2" />
-          </label>
-          <label class="lab-field">
-            <span>Max position % of liquidity <output id="out-max-pos-pct" for="max-pos-pct">5</output></span>
-            <input type="range" id="max-pos-pct" min="1" max="25" step="1" value="5" />
-          </label>
-          <label class="lab-field">
-            <span>Gate mode</span>
-            <select id="gate-mode" class="control-input">
-              <option value="off">Off (metrics only)</option>
-              <option value="warn" selected>Warn (log only)</option>
-              <option value="block">Block entries</option>
-            </select>
-          </label>
+          <div class="lab-form-card">
+            <h3 class="lab-form-card-title">Preset identity</h3>
+            <label class="lab-field">
+              <span>Preset name</span>
+              <input type="text" id="preset-name" class="control-input" placeholder="My spread filter" />
+            </label>
+          </div>
 
-          <fieldset class="lab-bot-profile-section">
-            <legend class="lab-section-legend">Bot profile</legend>
+          <div class="lab-form-card">
+            <h3 class="lab-form-card-title">Microstructure gates</h3>
+            <label class="lab-field">
+              <span>Max spread (¢) <output id="out-max-spread" for="max-spread">5</output></span>
+              <input type="range" id="max-spread" min="1" max="20" step="0.5" value="5" />
+            </label>
+            <label class="lab-field">
+              <span>Min depth ($, weaker side) <output id="out-min-depth" for="min-depth">1000</output></span>
+              <input type="range" id="min-depth" min="100" max="10000" step="100" value="1000" />
+            </label>
+            <label class="lab-field">
+              <span>Min 24h volume ($) <output id="out-min-volume" for="min-volume">0</output></span>
+              <input type="range" id="min-volume" min="0" max="50000" step="500" value="0" />
+            </label>
+            <label class="lab-field">
+              <span>Max |imbalance| <output id="out-max-imbalance" for="max-imbalance">0.8</output></span>
+              <input type="range" id="max-imbalance" min="0.1" max="1" step="0.05" value="0.8" />
+            </label>
+            <label class="lab-field">
+              <span>Max slippage (%) <output id="out-max-slippage" for="max-slippage">2</output></span>
+              <input type="range" id="max-slippage" min="0.1" max="10" step="0.1" value="2" />
+            </label>
+            <label class="lab-field">
+              <span>Max position % of liquidity <output id="out-max-pos-pct" for="max-pos-pct">5</output></span>
+              <input type="range" id="max-pos-pct" min="1" max="25" step="1" value="5" />
+            </label>
+            <label class="lab-field">
+              <span>Gate mode</span>
+              <select id="gate-mode" class="control-input">
+                <option value="off">Off (metrics only)</option>
+                <option value="warn" selected>Warn (log only)</option>
+                <option value="block">Block entries</option>
+              </select>
+            </label>
+          </div>
+
+          <fieldset class="lab-form-card lab-bot-profile-section">
+            <legend class="lab-form-card-title">Bot profile</legend>
             <p class="lab-lead lab-sizing-hint">Strategy, stop-loss, entry window, and per-market trade cap — shared with the <a href="/bot">Bot</a> page.</p>
             <label class="lab-field">
               <span>Strategy</span>
@@ -121,12 +129,12 @@
               </div>
             </label>
             <label class="lab-field">
-              <span>Don't enter while more than __ s remain</span>
-              <input id="lab-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default (e.g. 270 on 5m)" />
+              <span>Earliest entry (sec after start)</span>
+              <input id="lab-entry-max-seconds" class="control-input" type="number" min="0" step="1" placeholder="default 30 on 5m" />
             </label>
             <label class="lab-field">
-              <span>Don't enter until __ s after window opens</span>
-              <input id="lab-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default min time left" />
+              <span>Latest entry (sec after start)</span>
+              <input id="lab-entry-min-seconds" class="control-input" type="number" min="0" step="1" placeholder="default 270 on 5m" />
             </label>
             <label class="lab-field">
               <span>Take profit (YES, optional)</span>
@@ -164,8 +172,8 @@
             </label>
           </fieldset>
 
-          <fieldset class="lab-sizing-section">
-            <legend class="lab-section-legend">Bet sizing</legend>
+          <fieldset class="lab-form-card lab-sizing-section">
+            <legend class="lab-form-card-title">Bet sizing</legend>
             <p class="lab-lead lab-sizing-hint">How much USDC to risk per entry (paper bot reads active preset each cycle).</p>
             <div class="lab-segmented" role="radiogroup" aria-label="Bet sizing mode">
               <label class="lab-segment">
@@ -222,7 +230,7 @@
         </form>
         <div class="lab-saved-presets">
           <span class="mini-label">Saved presets</span>
-          <ul id="lab-preset-list"></ul>
+          <ul id="lab-preset-list" class="lab-preset-chips"></ul>
         </div>
         <p id="lab-form-status" class="lab-form-status" role="status"></p>
       </section>

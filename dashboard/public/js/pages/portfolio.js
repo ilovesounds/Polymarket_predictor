@@ -36,7 +36,10 @@
   }
 
   function renderSummary(portfolio) {
-    if (cashEl) cashEl.textContent = D.fmtDollars(portfolio.cash);
+    if (cashEl) {
+      cashEl.textContent = D.fmtDollars(portfolio.cash);
+      cashEl.className = 'bankroll-stat-value';
+    }
     if (startingEl) {
       const envStart = portfolio.envStartingCash;
       const extra = Number.isFinite(portfolio.netCashDelta) && portfolio.netCashDelta !== 0
@@ -55,14 +58,21 @@
       unrealizedEl.textContent = D.fmtDollars(portfolio.totalUnrealizedPnl);
       unrealizedEl.className = `metric-value ${D.pnlClass(portfolio.totalUnrealizedPnl)}`.trim();
     }
-    if (positionValueEl) positionValueEl.textContent = D.fmtDollars(portfolio.openPositionValue);
-    if (equityEl) equityEl.textContent = D.fmtDollars(portfolio.portfolio ?? portfolio.totalEquity);
+    if (positionValueEl) {
+      positionValueEl.textContent = D.fmtDollars(portfolio.openPositionValue);
+      positionValueEl.className = 'bankroll-stat-value';
+    }
+    if (equityEl) {
+      equityEl.textContent = D.fmtDollars(portfolio.portfolio ?? portfolio.totalEquity);
+      equityEl.className = 'bankroll-hero-value';
+    }
     if (roiEl) {
       roiEl.textContent = fmtRoi(portfolio.roiPct);
-      roiEl.className = `metric-value ${D.pnlClass(portfolio.roiPct)}`.trim();
+      roiEl.className = `bankroll-roi-badge ${D.pnlClass(portfolio.roiPct)}`.trim();
     }
     if (openCountEl) {
       openCountEl.textContent = String(portfolio.openPositionCount ?? portfolio.openPositions?.length ?? 0);
+      openCountEl.className = 'bankroll-stat-value';
     }
   }
 

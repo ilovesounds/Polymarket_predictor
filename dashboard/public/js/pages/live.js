@@ -24,13 +24,213 @@
   const tradePopupHost = document.getElementById('trade-popup-host');
   const followLiveToggle = document.getElementById('follow-live-toggle');
   const btcChartContainer = document.getElementById('btc-price-chart');
+  const microstructureStatus = document.getElementById('microstructure-status');
+  const microstructureCards = document.getElementById('microstructure-cards');
+  const btcUpPup = document.getElementById('btc-up-pup');
+  const btcUpPolyYes = document.getElementById('btc-up-poly-yes');
+  const btcUpEdge = document.getElementById('btc-up-edge');
+  const btcUpEdgeThreshold = document.getElementById('btc-up-edge-threshold');
+  const btcUpModelLabel = document.getElementById('btc-up-model-label');
+  const btcUpEntrySignal = document.getElementById('btc-up-entry-signal');
+  const btcUpSignalRow = document.getElementById('btc-up-signal-row');
+  /** @type {Record<string, { card: HTMLElement, valueEl: HTMLElement, badgeEl: HTMLElement, hintEl: HTMLElement|null }>} */
+  const microSignalUi = {};
+
+  function buildMicrostructureCards() {
+    if (!microstructureCards) return;
+    for (const card of microstructureCards.querySelectorAll('.micro-signal-card')) {
+      const key = card.dataset.signal;
+      if (!key) continue;
+      microSignalUi[key] = {
+        card,
+        valueEl: card.querySelector('[data-role="value"]'),
+        badgeEl: card.querySelector('[data-role="badge"]'),
+        hintEl: card.querySelector('[data-role="hint"]'),
+      };
+    }
+  }
+
+  function fmtRatio(v, digits = 3) {
+    if (!Number.isFinite(v)) return '—';
+    return v.toFixed(digits);
+  }
+
+  function fmtPct(v, digits = 4) {
+    if (!Number.isFinite(v)) return '—';
+    const sign = v > 0 ? '+' : '';
+    return `${sign}${(v * 100).toFixed(digits)}%`;
+  }
+
+  function fmtVol(v) {
+    if (!Number.isFinite(v)) return '—';
+    if (v < 0.0001) return v.toExponential(2);
+    return v.toFixed(6);
+  }
+
+  function applySignalCardStyle(card, label, extraClass) {
+    if (!card) return;
+    card.classList.remove('bullish', 'bearish', 'neutral', 'elevated', 'normal');
+    if (extraClass) card.classList.add(extraClass);
+    else if (label === 'bullish' || label === 'bearish' || label === 'elevated' || label === 'normal') {
+      card.classList.add(label);
+    } else {
+      card.classList.add('neutral');
+    }
+  }
+
+  function renderMicrostructure(msg) {
+    const signals = msg?.signals;
+    if (!signals) return;
+
+    if (microstructureStatus) {
+      const n = msg.tradeCount60s ?? 0;
+      microstructureStatus.textContent = n > 0 ? `Live · ${n} trades` : 'Waiting';
+      microstructureStatus.className = `pill pill-sm ${n > 0 ? 'on' : 'off'}`;
+    }
+
+    const ofi = signals.ofi;
+    if (microSignalUi.ofi) {
+      const ui = microSignalUi.ofi;
+      if (ui.valueEl) ui.valueEl.textContent = fmtRatio(ofi?.value);
+      if (ui.badgeEl) ui.badgeEl.textContent = ofi?.label || '—';
+      applySignalCardStyle(ui.card, ofi?.label);
+      if (ui.badgeEl) ui.badgeEl.className = `micro-signal-badge ${ofi?.label || 'neutral'}`;
+    }
+
+    const agg = signals.aggressorRatio;
+    if (microSignalUi.aggressorRatio) {
+      const ui = microSignalUi.aggressorRatio;
+      if (ui.valueEl) ui.valueEl.textContent = fmtRatio(agg?.value);
+      if (ui.badgeEl) ui.badgeEl.textContent = agg?.label || '—';
+      applySignalCardStyle(ui.card, agg?.label);
+      if (ui.badgeEl) ui.badgeEl.className = `micro-signal-badge ${agg?.label || 'neutral'}`;
+    }
+
+    const vol = signals.realizedVol30s;
+    if (microSignalUi.realizedVol30s) {
+      const ui = microSignalUi.realizedVol30s;
+      if (ui.valueEl) ui.valueEl.textContent = fmtVol(vol?.value);
+      if (ui.badgeEl) ui.badgeEl.textContent = vol?.label || '—';
+      applySignalCardStyle(ui.card, vol?.label, vol?.label === 'elevated' ? 'elevated' : 'neutral');
+      if (ui.badgeEl) ui.badgeEl.className = `micro-signal-badge ${vol?.label || 'neutral'}`;
+    }
+
+    const mom = signals.momentum60s;
+    if (microSignalUi.momentum60s) {
+      const ui = microSignalUi.momentum60s;
+      if (ui.valueEl) ui.valueEl.textContent = fmtPct(mom?.value);
+      if (ui.badgeEl) ui.badgeEl.textContent = mom?.label || '—';
+      applySignalCardStyle(ui.card, mom?.label);
+      if (ui.badgeEl) ui.badgeEl.className = `micro-signal-badge ${mom?.label || 'neutral'}`;
+    }
+
+    const comp = signals.compositeConviction;
+    if (microSignalUi.compositeConviction) {
+      const ui = microSignalUi.compositeConviction;
+      const conviction = comp?.conviction === 'high' ? 'High' : 'Low';
+      const dir = comp?.label || 'neutral';
+      if (ui.valueEl) {
+        ui.valueEl.textContent = comp?.conviction === 'high'
+          ? `${conviction} ${dir}`
+          : `${conviction} · ${dir}`;
+      }
+      if (ui.badgeEl) {
+        ui.badgeEl.textContent = comp?.conviction === 'high' ? dir : 'low';
+      }
+      applySignalCardStyle(ui.card, dir);
+      if (ui.badgeEl) {
+        ui.badgeEl.className = `micro-signal-badge ${comp?.conviction === 'high' ? dir : 'low'}`;
+      }
+      if (ui.hintEl && comp?.interpretation) {
+        ui.hintEl.textContent = comp.interpretation;
+      }
+    }
+  }
+
+  async function loadMicrostructureSnapshot() {
+    try {
+      const snap = await fetch('/api/signals/microstructure').then((r) => r.json());
+      if (snap?.signals) renderMicrostructure(snap);
+    } catch (_) {}
+  }
+
+  function renderBtcUpModel(msg) {
+    if (!msg || (msg.type && msg.type !== 'btc_up_model')) return;
+    const pPct = Number.isFinite(msg.pUp) ? `${(msg.pUp * 100).toFixed(0)}%` : '—';
+    const yPct = Number.isFinite(msg.polyYes) ? `${(msg.polyYes * 100).toFixed(0)}%` : '—';
+    if (btcUpPup) btcUpPup.textContent = pPct;
+    if (btcUpPolyYes) btcUpPolyYes.textContent = yPct;
+    if (btcUpEdge) {
+      btcUpEdge.classList.remove('positive', 'negative');
+      if (Number.isFinite(msg.edgePct)) {
+        const sign = msg.edgePct >= 0 ? '+' : '';
+        btcUpEdge.textContent = `${sign}${msg.edgePct.toFixed(1)}%`;
+        btcUpEdge.classList.add(msg.edgePct >= 0 ? 'positive' : 'negative');
+      } else {
+        btcUpEdge.textContent = '—';
+      }
+    }
+    if (btcUpEdgeThreshold && Number.isFinite(msg.edgeThreshold)) {
+      btcUpEdgeThreshold.textContent = `need ≥${(msg.edgeThreshold * 100).toFixed(0)}% edge`;
+    }
+    if (btcUpModelLabel) {
+      const conf = msg.confidence || 'low';
+      const label = msg.label || 'neutral';
+      btcUpModelLabel.textContent = msg.coldStart
+        ? 'Warming up (60s window) — P(up)=50%'
+        : `${label} · ${conf} confidence`;
+    }
+    if (btcUpEntrySignal) {
+      const on = Boolean(msg.entrySignal) && Boolean(msg.ready);
+      btcUpEntrySignal.textContent = on ? 'Entry signal' : 'No edge';
+      btcUpEntrySignal.className = `pill pill-sm ${on ? 'on' : 'off'}`;
+    }
+    if (btcUpSignalRow && msg.signals) {
+      const chips = {
+        ofi: msg.signals.ofi,
+        aggressorRatio: msg.signals.aggressorRatio,
+        realizedVol30s: msg.signals.realizedVol30s,
+        momentum60s: msg.signals.momentum60s,
+      };
+      for (const chip of btcUpSignalRow.querySelectorAll('.btc-up-signal-chip')) {
+        const key = chip.dataset.signal;
+        const v = chips[key];
+        if (!Number.isFinite(v)) {
+          chip.textContent = `${key === 'aggressorRatio' ? 'Agg' : key === 'realizedVol30s' ? 'Vol' : key === 'momentum60s' ? 'Mom' : 'OFI'} —`;
+          continue;
+        }
+        if (key === 'momentum60s') chip.textContent = `Mom ${(v * 100).toFixed(2)}%`;
+        else if (key === 'realizedVol30s') chip.textContent = `Vol ${v.toExponential(1)}`;
+        else if (key === 'aggressorRatio') chip.textContent = `Agg ${v.toFixed(2)}`;
+        else chip.textContent = `OFI ${v.toFixed(2)}`;
+      }
+    }
+  }
+
+  async function loadBtcUpModelSnapshot() {
+    try {
+      const snap = await fetch('/api/signals/btc-up-model').then((r) => r.json());
+      renderBtcUpModel(snap);
+    } catch (_) {}
+  }
+
   const MAX_POPUPS = 4;
   const POPUP_MS = 2600;
   const CHART_HISTORY_MS = 15 * 60_000;
   const CHART_MAX_POINTS = 3600;
-  const CHART_ORANGE = '#f97316';
-  const CHART_BEAT_LINE = 'rgba(255, 255, 255, 0.42)';
   const Y_TICK_STEP = 25;
+
+  function cssVar(name, fallback) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  }
+
+  function chartLineColor() {
+    return cssVar('--chart-line', cssVar('--orange', '#f97316'));
+  }
+
+  function chartBeatLineColor() {
+    return cssVar('--chart-beat-line', 'rgba(255, 255, 255, 0.42)');
+  }
 
   const EXCHANGES = [
     { id: 'binance', label: 'Binance', pair: 'BTC/USDT', color: '#f0b90b' },
@@ -108,21 +308,64 @@
     pruneExchangeSeries(source, ts);
   }
 
+  function chartThemeOptions() {
+    const style = getComputedStyle(document.documentElement);
+    const pick = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    return {
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: pick('--chart-bg', 'rgba(0,0,0,0.22)') },
+        textColor: pick('--chart-text', 'rgba(139,149,168,0.9)'),
+      },
+      grid: {
+        vertLines: { color: pick('--chart-grid', 'rgba(255,255,255,0.04)') },
+        horzLines: { color: pick('--chart-grid-strong', 'rgba(255,255,255,0.07)') },
+      },
+      rightPriceScale: { borderColor: pick('--chart-border', 'rgba(255,255,255,0.06)') },
+      timeScale: { borderColor: pick('--chart-border', 'rgba(255,255,255,0.06)') },
+    };
+  }
+
+  function miniChartThemeOptions() {
+    const style = getComputedStyle(document.documentElement);
+    const pick = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    return {
+      layout: {
+        background: { type: LightweightCharts.ColorType.Solid, color: pick('--mini-chart-bg', 'rgba(0,0,0,0.12)') },
+        textColor: pick('--chart-text', 'rgba(139,149,168,0.75)'),
+      },
+      grid: {
+        vertLines: { visible: false },
+        horzLines: { color: pick('--mini-chart-grid', 'rgba(255,255,255,0.05)') },
+      },
+    };
+  }
+
+  function applyChartThemes() {
+    if (typeof LightweightCharts === 'undefined') return;
+    const mainOpts = chartThemeOptions();
+    if (btcChart) {
+      btcChart.applyOptions(mainOpts);
+    }
+    if (btcLineSeries) {
+      btcLineSeries.applyOptions({ color: chartLineColor() });
+    }
+    for (const ex of EXCHANGES) {
+      const ui = exchangeUi[ex.id];
+      if (ui?.chart) ui.chart.applyOptions(miniChartThemeOptions());
+    }
+  }
+
   function initMiniChart(source, container, color) {
     if (!container || typeof LightweightCharts === 'undefined') return null;
     const { createChart } = LightweightCharts;
     const chart = createChart(container, {
       width: container.clientWidth || 280,
       height: 72,
+      ...miniChartThemeOptions(),
       layout: {
-        background: { type: LightweightCharts.ColorType.Solid, color: 'rgba(0, 0, 0, 0.12)' },
-        textColor: 'rgba(139, 149, 168, 0.75)',
+        ...miniChartThemeOptions().layout,
         fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
         fontSize: 10,
-      },
-      grid: {
-        vertLines: { visible: false },
-        horzLines: { color: 'rgba(255, 255, 255, 0.05)' },
       },
       rightPriceScale: {
         borderVisible: false,
@@ -154,7 +397,7 @@
     if (!ui || !st) return;
     if (!ui.chart && ui.chartHost) {
       const ex = EXCHANGES.find((e) => e.id === source);
-      const built = initMiniChart(source, ui.chartHost, ex?.color || CHART_ORANGE);
+      const built = initMiniChart(source, ui.chartHost, ex?.color || chartLineColor());
       if (built) {
         ui.chart = built.chart;
         ui.lineSeries = built.lineSeries;
@@ -400,22 +643,18 @@
     btcChart = createChart(btcChartContainer, {
       width: btcChartContainer.clientWidth || 640,
       height: btcChartContainer.clientHeight || 240,
+      ...chartThemeOptions(),
       layout: {
-        background: { type: LightweightCharts.ColorType.Solid, color: 'rgba(0, 0, 0, 0.22)' },
-        textColor: 'rgba(139, 149, 168, 0.9)',
+        ...chartThemeOptions().layout,
         fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
         fontSize: 11,
       },
-      grid: {
-        vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
-        horzLines: { color: 'rgba(255, 255, 255, 0.07)' },
-      },
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.06)',
+        ...chartThemeOptions().rightPriceScale,
         scaleMargins: { top: 0.1, bottom: 0.1 },
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.06)',
+        ...chartThemeOptions().timeScale,
         timeVisible: true,
         secondsVisible: true,
         fixLeftEdge: false,
@@ -438,7 +677,7 @@
     });
 
     btcLineSeries = btcChart.addLineSeries({
-      color: CHART_ORANGE,
+      color: chartLineColor(),
       lineWidth: 2,
       crosshairMarkerVisible: false,
       lastValueVisible: false,
@@ -524,7 +763,7 @@
       if (!beatPriceLine) {
         beatPriceLine = btcLineSeries.createPriceLine({
           price: beat,
-          color: CHART_BEAT_LINE,
+          color: chartBeatLineColor(),
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
@@ -542,7 +781,7 @@
       if (!spotPriceLine) {
         spotPriceLine = btcLineSeries.createPriceLine({
           price: last.p,
-          color: CHART_ORANGE,
+          color: chartLineColor(),
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: false,
@@ -557,7 +796,7 @@
     btcLineSeries.setMarkers([{
       time: lastTime,
       position: 'inBar',
-      color: CHART_ORANGE,
+      color: chartLineColor(),
       shape: 'circle',
       size: 0.9,
     }]);
@@ -854,6 +1093,12 @@
     if (EXCHANGES.some((ex) => ex.id === msg.source) && msg.type === 'history') {
       handleExchangeHistory(msg);
     }
+    if (msg.source === 'signals' && msg.type === 'microstructure') {
+      renderMicrostructure(msg);
+    }
+    if (msg.source === 'signals' && msg.type === 'btc_up_model') {
+      renderBtcUpModel(msg);
+    }
   });
 
   setInterval(() => {
@@ -865,11 +1110,15 @@
   }, 1000);
 
   window.addEventListener('resize', scheduleChartDraw);
+  window.addEventListener('dashboard-theme-change', applyChartThemes);
 
   initFollowLiveToggle();
   buildExchangeCards();
+  buildMicrostructureCards();
   initBtcChart();
   loadBtcHistory();
   loadExchangeHistories();
+  loadMicrostructureSnapshot();
+  loadBtcUpModelSnapshot();
   renderPrimary();
 })();

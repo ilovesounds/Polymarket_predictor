@@ -83,7 +83,11 @@
       stopLossPct: null,
       stopLossPrice: null,
       entryMinSeconds: parseOptNum(els.entryMinSeconds?.value),
-      entryMaxSeconds: parseOptNum(els.entryMaxSeconds?.value),
+      entryMaxSeconds: (() => {
+        const earliest = parseOptNum(els.entryMaxSeconds?.value);
+        if (earliest == null) return null;
+        return earliestAfterStartToMaxRemaining(earliest, windowMinutesFromEls(els));
+      })(),
       entryMinPrice: parseOptNum(els.entryMinPrice?.value),
       entryMaxPrice: parseOptNum(els.entryMaxPrice?.value),
       takeProfitPrice: parseOptNum(els.takeProfitPrice?.value),
@@ -159,7 +163,10 @@
       els.entryMinSeconds.value = profile.entryMinSeconds != null ? String(profile.entryMinSeconds) : '';
     }
     if (els.entryMaxSeconds) {
-      els.entryMaxSeconds.value = profile.entryMaxSeconds != null ? String(profile.entryMaxSeconds) : '';
+      const wm = windowMinutesFromEls(els);
+      els.entryMaxSeconds.value = profile.entryMaxSeconds != null
+        ? String(maxRemainingToEarliestAfterStart(profile.entryMaxSeconds, wm))
+        : '';
     }
     if (els.entryMinPrice) {
       els.entryMinPrice.value = profile.entryMinPrice != null ? String(profile.entryMinPrice) : '';
@@ -190,6 +197,26 @@
     syncRunLimitCustomVisibility(els);
   }
 
+  function marketWindowMinutes(marketWindow) {
+    if (marketWindow === '15m') return 15;
+    if (marketWindow === '1d') return 1440;
+    return 5;
+  }
+
+  function windowMinutesFromEls(els) {
+    return marketWindowMinutes(els.marketWindowSelect?.value || '5m');
+  }
+
+  function maxRemainingToEarliestAfterStart(maxRemaining, windowMinutes) {
+    const total = WINDOW_TOTAL_SEC[windowMinutes] || 300;
+    return total - maxRemaining;
+  }
+
+  function earliestAfterStartToMaxRemaining(earliestAfterStart, windowMinutes) {
+    const total = WINDOW_TOTAL_SEC[windowMinutes] || 300;
+    return total - earliestAfterStart;
+  }
+
   function resolveEntryBounds(windowMinutes, rules = {}) {
     const total = WINDOW_TOTAL_SEC[windowMinutes] || 300;
     let maxRemaining;
@@ -210,6 +237,14 @@
     return { minRemaining, maxRemaining };
   }
 
+  function formatEntryWindowBand(windowMinutes, rules = {}) {
+    const { minRemaining, maxRemaining } = resolveEntryBounds(windowMinutes, rules);
+    const total = WINDOW_TOTAL_SEC[windowMinutes] || 300;
+    const earliest = total - maxRemaining;
+    const latest = total - minRemaining;
+    return `${earliest}–${latest}s after market start`;
+  }
+
   function resolveStopFromProfile(profile = {}, entryPrice = 0.5, strategyStop = null) {
     const floors = [];
     if (Number.isFinite(profile.stopLossPrice) && profile.stopLossPrice > 0) {
@@ -228,10 +263,9 @@
       entryMinSeconds: profile.entryMinSeconds,
       entryMaxSeconds: profile.entryMaxSeconds,
     };
-    const { minRemaining, maxRemaining } = resolveEntryBounds(windowMinutes, rules);
     const stop = resolveStopFromProfile(profile);
     const lines = [
-      `Entry allowed when: ${minRemaining}s < time left < ${maxRemaining}s`,
+      `Entry window: ${formatEntryWindowBand(windowMinutes, rules)}`,
       `Stop loss: YES ≤ ${stop.toFixed(2)}`,
     ];
     if (Number.isFinite(profile.takeProfitPrice)) {

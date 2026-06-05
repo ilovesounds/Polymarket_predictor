@@ -1,4 +1,5 @@
 const { computeMomentum } = require('../api/feeds_runtime');
+const { buildBtcUpModelView } = require('./btcUpModel');
 
 const STRATEGIES = {
   deterministic_yes_50: {
@@ -41,6 +42,37 @@ const STRATEGIES = {
         entryEligible,
         edgeCase: 'YES_GE_0_50_MOMENTUM_UP',
         reason: `YES ${yesPrice?.toFixed?.(3) || 'n/a'} >= 0.500 and momentum=${momentum}`,
+      };
+    },
+  },
+  microstructure_edge: {
+    id: 'microstructure_edge',
+    label: 'Microstructure edge (P(up) vs YES)',
+    description: 'Enter YES when model P(BTC up in 5m) exceeds Polymarket YES by BOT_EDGE_THRESHOLD.',
+    stop: 0.45,
+    decide({ yesPrice, btcUpModel, edgeThreshold }) {
+      const threshold = Number.isFinite(edgeThreshold)
+        ? edgeThreshold
+        : (btcUpModel?.edgeThreshold ?? 0.05);
+      const model = btcUpModel && typeof btcUpModel === 'object'
+        ? btcUpModel
+        : buildBtcUpModelView(
+          { pUp: 0.5, ready: false, coldStart: true, edgeThreshold: threshold },
+          yesPrice,
+        );
+      const pPct = Number.isFinite(model.pUp) ? (model.pUp * 100).toFixed(0) : 'n/a';
+      const yPct = Number.isFinite(yesPrice) ? (yesPrice * 100).toFixed(0) : 'n/a';
+      const edgePct = Number.isFinite(model.edgePct)
+        ? `${model.edgePct >= 0 ? '+' : ''}${model.edgePct.toFixed(0)}`
+        : 'n/a';
+      const entryEligible = Boolean(model.ready)
+        && Boolean(model.entrySignal)
+        && Number.isFinite(yesPrice);
+      return {
+        entryEligible,
+        edgeCase: 'MICROSTRUCTURE_EDGE',
+        edgeCents: Number.isFinite(model.edgeCents) ? model.edgeCents : model.edgePct,
+        reason: `P(up)=${pPct}% | Poly YES=${yPct}% | edge=${edgePct}% (need ≥${(threshold * 100).toFixed(0)}%)`,
       };
     },
   },

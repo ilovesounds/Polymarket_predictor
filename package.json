@@ -18,7 +18,8 @@
     "nats:up": "docker compose up -d nats",
     "nats:down": "docker compose down",
     "check:docs": "node scripts/check-docs-stale.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node scripts/test-btc-up-model.js",
+    "test:btc-up-model": "node scripts/test-btc-up-model.js"
   },
   "keywords": [],
   "author": "",

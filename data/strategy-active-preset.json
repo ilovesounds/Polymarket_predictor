@@ -9,10 +9,10 @@
   "gateMode": "warn",
   "sizingMode": "percent",
   "fixedBetUsd": 20,
-  "betPercent": 25,
+  "betPercent": 50,
   "kellyFractionCap": 0.08,
   "defaultWinRate": 0.55,
   "id": "default",
   "name": "default",
-  "appliedAt": 1780070729025
+  "appliedAt": 1780081529625
 }

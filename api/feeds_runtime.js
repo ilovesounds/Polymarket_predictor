@@ -51,10 +51,25 @@ function connectBinanceFeed(onPrice) {
       const receivedAt = Date.now();
       const sourceTs = Number(data.T || data.E) || receivedAt;
       const price = parseFloat(data.p);
+      const qty = parseFloat(data.q);
+      const isBuyerMaker = Boolean(data.m);
       const latencyMs = receivedAt - sourceTs;
       binanceState = { price, updatedAt: receivedAt, sourceUpdatedAt: sourceTs, latencyMs };
       recordLatency('binance_ws', { sourceTs, receivedTs: receivedAt, meta: { price } });
-      if (onPrice) onPrice(price, { sourceTs, receivedAt, latencyMs });
+      if (onPrice) {
+        onPrice(price, {
+          sourceTs,
+          receivedAt,
+          latencyMs,
+          trade: {
+            price,
+            qty,
+            isBuyerMaker,
+            sourceTs,
+            receivedAt,
+          },
+        });
+      }
     };
     binanceWs.onerror = (e) => console.error('[Binance WS] error:', e.message);
     binanceWs.onclose = () => setTimeout(connect, 2000);

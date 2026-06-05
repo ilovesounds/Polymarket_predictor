@@ -13,17 +13,35 @@
   const obYesAskLadder = document.getElementById('ob-yes-ask-ladder');
   const obNoBidLadder = document.getElementById('ob-no-bid-ladder');
   const obNoAskLadder = document.getElementById('ob-no-ask-ladder');
+  const obYesSpread = document.getElementById('ob-yes-spread');
+  const obNoSpread = document.getElementById('ob-no-spread');
   const obUpdated = document.getElementById('ob-updated');
 
-  function renderLadder(el, levels = [], prefix = '') {
+  function maxLadderSize(levels = []) {
+    return levels.reduce((max, row) => Math.max(max, Number(row.size) || 0), 0);
+  }
+
+  function renderLadder(el, levels = [], side = 'bid') {
     if (!el) return;
     if (!levels.length) {
-      el.innerHTML = '<div class="ladder-empty">—</div>';
+      el.innerHTML = '<div class="ladder-empty">No levels</div>';
       return;
     }
+    const maxSize = maxLadderSize(levels);
     el.innerHTML = levels
-      .map((row) => `<div>${prefix}${D.fmtPrice(row.price, 3)} × ${D.fmtSize(row.size)}</div>`)
+      .map((row) => {
+        const pct = maxSize > 0 ? ((Number(row.size) || 0) / maxSize) * 100 : 0;
+        return `<div class="ladder-row ladder-${side}" style="--depth:${pct.toFixed(1)}%">
+          <span class="ladder-px num">${D.fmtPrice(row.price, 3)}</span>
+          <span class="ladder-sz num">${D.fmtSize(row.size)}</span>
+        </div>`;
+      })
       .join('');
+  }
+
+  function fmtSpread(bestBid, bestAsk) {
+    if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk)) return null;
+    return bestAsk - bestBid;
   }
 
   function renderSide(ladder, side) {
@@ -41,10 +59,14 @@
     if (obNoBestAsk) obNoBestAsk.textContent = D.fmtPrice(no.bestAsk, 3);
     if (obYesDepth) obYesDepth.textContent = D.fmtSize(yes.depth);
     if (obNoDepth) obNoDepth.textContent = D.fmtSize(no.depth);
-    renderLadder(obYesBidLadder, yes.bids, 'B ');
-    renderLadder(obYesAskLadder, yes.asks, 'A ');
-    renderLadder(obNoBidLadder, no.bids, 'B ');
-    renderLadder(obNoAskLadder, no.asks, 'A ');
+    const yesSpread = fmtSpread(yes.bestBid, yes.bestAsk);
+    const noSpread = fmtSpread(no.bestBid, no.bestAsk);
+    if (obYesSpread) obYesSpread.textContent = Number.isFinite(yesSpread) ? `${D.fmtPrice(yesSpread, 3)} (${(yesSpread * 100).toFixed(1)}¢)` : '—';
+    if (obNoSpread) obNoSpread.textContent = Number.isFinite(noSpread) ? `${D.fmtPrice(noSpread, 3)} (${(noSpread * 100).toFixed(1)}¢)` : '—';
+    renderLadder(obYesBidLadder, yes.bids, 'bid');
+    renderLadder(obYesAskLadder, yes.asks, 'ask');
+    renderLadder(obNoBidLadder, no.bids, 'bid');
+    renderLadder(obNoAskLadder, no.asks, 'ask');
     if (obUpdated) obUpdated.textContent = `Updated ${D.fmtTs(msg.timestamp || Date.now())}${msg.via ? ` · ${msg.via}` : ''}`;
   }
 
@@ -61,11 +83,22 @@
     }
     const remaining = endTime - Date.now();
     polyResolution.hidden = false;
-    polyResolution.classList.remove('urgent', 'resolved');
+    polyResolution.classList.remove('urgent', 'resolved', 'live', 'upcoming');
     if (remaining <= 0) {
       polyResolution.textContent = 'Resolved';
       polyResolution.classList.add('resolved');
       return;
+    }
+    const windowStart = Number.isFinite(market?.windowStartTime)
+      ? market.windowStartTime
+      : (Number.isFinite(endTime) && market?.windowMinutes
+        ? endTime - market.windowMinutes * 60_000
+        : null);
+    const windowActive = !Number.isFinite(windowStart) || windowStart <= Date.now();
+    if (!windowActive) {
+      polyResolution.classList.add('upcoming');
+    } else {
+      polyResolution.classList.add('live');
     }
     polyResolution.textContent = `Resolves in ${D.fmtCountdown(remaining)}`;
     if (remaining < 5 * 60 * 1000) polyResolution.classList.add('urgent');

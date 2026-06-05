@@ -54,6 +54,9 @@ function loadConfig(env = process.env) {
 
   const strategyIds = parseStrategyPriority(env);
   const legacyStrategy = normalizeStrategyId(env.BOT_STRATEGY || 'deterministic_yes_50');
+  const resolvedStrategyIds = strategyIds.length ? strategyIds : [legacyStrategy];
+  const useMicrostructureModel = env.BOT_USE_MICROSTRUCTURE_MODEL !== 'false'
+    || resolvedStrategyIds.includes('microstructure_edge');
   const exitConfig = resolveExitConfig(env);
   const envStartingCash = parseFloat(env.STARTING_CASH || env.STARTING_BANKROLL || '20');
   const profileId = env.BOT_PROFILE_ID || env.PAPER_WALLET_PROFILE || null;
@@ -105,7 +108,7 @@ function loadConfig(env = process.env) {
     netCashDelta: cashFromFile.netCashDelta,
     marketMode,
     allowedWindows: allowedWindows.length ? allowedWindows : getAllowedWindows(),
-    strategyIds: strategyIds.length ? strategyIds : [legacyStrategy],
+    strategyIds: resolvedStrategyIds,
     legacyStrategyId: legacyStrategy,
     useNats: isNatsEnabled(env),
     botUseNatsFeeds: isNatsEnabled(env) && env.BOT_USE_NATS_FEEDS === 'true',
@@ -127,6 +130,8 @@ function loadConfig(env = process.env) {
     exitMode: exitConfig.exitMode,
     exitTargetPrice: exitConfig.exitTargetPrice,
     profileId: profileId || null,
+    edgeThreshold: Math.max(0, parseFloat(env.BOT_EDGE_THRESHOLD || '0.05') || 0.05),
+    useMicrostructureModel,
   };
 }
 

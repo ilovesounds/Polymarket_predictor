@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-page="backtest">
@@ -20,37 +21,65 @@
     </div>
     <nav class="app-nav" aria-label="Dashboard"></nav>
     <div class="status-bar status-bar-full">
-      <span id="ws-status" class="pill off">WS disconnected</span>
-      <span id="binance-status" class="pill off">Binance —</span>
-      <span id="poly-status" class="pill off">Polymarket —</span>
-      <span id="bot-status" class="pill">Bot idle</span>
+      <span id="ws-status" class="pill pill-sm off">WS disconnected</span>
+      <span id="binance-status" class="pill pill-sm off">Binance —</span>
+      <span id="poly-status" class="pill pill-sm off">Polymarket —</span>
+      <span id="bot-status" class="pill pill-sm">Bot idle</span>
     </div>
   </header>
 
-  <main class="page-main">
+  <main class="page-main backtest-page">
     <section class="card-panel page-panel backtest-panel">
-      <h2>Run backtest locally</h2>
-      <p class="backtest-lead">
-        Backtests run in the terminal via <code>backtest/engine.js</code> and print win rate, bankroll curve, and Sharpe to stdout.
-        The live dashboard does not embed results yet — use the commands below from the project root.
-      </p>
-      <div class="backtest-commands">
-        <div class="cmd-block">
-          <span class="mini-label">Default (15m window)</span>
-          <code>npm run backtest</code>
-        </div>
-        <div class="cmd-block">
-          <span class="mini-label">5-minute window</span>
-          <code>npm run backtest:5m</code>
-        </div>
-        <div class="cmd-block">
-          <span class="mini-label">Custom strategy / bankroll</span>
-          <code>BOT_STRATEGY=deterministic_yes_50 STARTING_BANKROLL=5 npm run backtest</code>
-        </div>
+      <header class="backtest-head">
+        <h2>Run backtest locally</h2>
+        <p class="backtest-lead">
+          Backtests run in the terminal via <code>backtest/engine.js</code> and print win rate, bankroll curve, and Sharpe to stdout.
+          The live dashboard does not embed results yet — use the commands below from the project root.
+        </p>
+      </header>
+
+      <div class="backtest-grid">
+        <article class="backtest-cmd-card">
+          <span class="backtest-cmd-label">Default</span>
+          <span class="backtest-cmd-meta">15m window</span>
+          <code class="backtest-cmd-code">npm run backtest</code>
+        </article>
+        <article class="backtest-cmd-card">
+          <span class="backtest-cmd-label">5-minute window</span>
+          <span class="backtest-cmd-meta">Shorter horizon</span>
+          <code class="backtest-cmd-code">npm run backtest:5m</code>
+        </article>
+        <article class="backtest-cmd-card backtest-cmd-card-wide">
+          <span class="backtest-cmd-label">Custom strategy / bankroll</span>
+          <span class="backtest-cmd-meta">Environment overrides</span>
+          <code class="backtest-cmd-code">BOT_STRATEGY=deterministic_yes_50 STARTING_BANKROLL=5 npm run backtest</code>
+        </article>
       </div>
-      <p class="backtest-note">
-        After a run, compare metrics with paper trading on the <a href="/bot">Bot</a> page or watch live prices on <a href="/live">Live</a>.
-      </p>
+
+      <div class="backtest-results-note">
+        <h3 class="backtest-results-title">Expected output</h3>
+        <div class="backtest-metrics-preview">
+          <div class="backtest-metric">
+            <span class="backtest-metric-label">Win rate</span>
+            <span class="backtest-metric-value">—</span>
+          </div>
+          <div class="backtest-metric">
+            <span class="backtest-metric-label">Final bankroll</span>
+            <span class="backtest-metric-value">—</span>
+          </div>
+          <div class="backtest-metric">
+            <span class="backtest-metric-label">Sharpe</span>
+            <span class="backtest-metric-value">—</span>
+          </div>
+          <div class="backtest-metric">
+            <span class="backtest-metric-label">Trades</span>
+            <span class="backtest-metric-value">—</span>
+          </div>
+        </div>
+        <p class="backtest-note">
+          After a run, compare metrics with paper trading on the <a href="/bot">Bot</a> page or watch live prices on <a href="/live">Live</a>.
+        </p>
+      </div>
     </section>
   </main>
 

@@ -108,6 +108,8 @@ const {
 } = require('../lib/paperWallet');
 const { previewBetLabel } = require('../lib/betSizing');
 const { PriceBufferStore } = require('../lib/priceRingBuffer');
+const { sharedEngine: microstructureEngine } = require('../signals/microstructure');
+const { computeBtcUpPrediction, buildBtcUpModelView } = require('../signals/btcUpModel');
 const {
   ALL_SOURCES,
   bufferKey: exchangeBufferKey,
@@ -126,6 +128,7 @@ const DEBUG_POLY_STREAM = process.env.DEBUG_POLY_STREAM === 'true';
 const NATS_FEED_FALLBACK_MS = Number(process.env.NATS_FEED_FALLBACK_MS || 12_000);
 const NATS_CONNECT_TIMEOUT_MS = Number(process.env.NATS_CONNECT_TIMEOUT_MS || 8_000);
 const POLY_WS_THROTTLE_MS = Number(process.env.POLY_WS_THROTTLE_MS || 250);
+const MICROSTRUCTURE_BROADCAST_MS = Number(process.env.MICROSTRUCTURE_BROADCAST_MS || 250);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MARKET_REFRESH_MS = Number(process.env.MARKET_REFRESH_MS || 45_000);
 const MARKET_ROLL_CHECK_MS = Number(process.env.MARKET_ROLL_CHECK_MS || 5_000);
@@ -189,6 +192,12 @@ const priceToBeatCache = new Map();
 let chainlinkPollTimer = null;
 const btcPriceBuffer = new PriceBufferStore(BTC_CHART_BUFFER_LEN);
 let lastBtcChartSampleAt = 0;
+let lastMicrostructureEmitAt = 0;
+let lastBtcUpModelEmitAt = 0;
+const BOT_EDGE_THRESHOLD = Math.max(
+  0,
+  parseFloat(process.env.BOT_EDGE_THRESHOLD || '0.05') || 0.05,
+);
 /** @type {Record<string, number>} */
 const lastExchangeSampleAt = Object.fromEntries(ALL_SOURCES.map((s) => [s, 0]));
 /** When true, ignore manual primary pin and always follow the active live window. */
@@ -1662,6 +1671,7 @@ async function subscribePolymarketMarkets(options = {}) {
       },
       timestamp: Date.now(),
     });
+    maybeBroadcastBtcUpModel(yes);
   };
 
   const seedMidpoints = async (market) => {
@@ -1791,10 +1801,73 @@ function broadcastExchangePrice(source, price, timing, extra = {}) {
   });
 }
 
+function microstructureWirePayload(snapshot) {
+  return {
+    source: 'signals',
+    type: 'microstructure',
+    timestamp: snapshot?.timestamp || Date.now(),
+    ...snapshot,
+  };
+}
+
+function getPrimaryPolyYesPrice() {
+  const primary = getPrimaryMarket();
+  if (!primary?.conditionId) return null;
+  const cached = marketYesPriceCache.get(primary.conditionId);
+  return Number.isFinite(cached?.price) ? cached.price : null;
+}
+
+function btcUpModelWirePayload(polyYes = null) {
+  const snap = microstructureEngine.getSnapshot();
+  const pred = computeBtcUpPrediction(snap, { edgeThreshold: BOT_EDGE_THRESHOLD });
+  const yes = Number.isFinite(polyYes) ? polyYes : getPrimaryPolyYesPrice();
+  const view = buildBtcUpModelView(pred, yes);
+  return {
+    source: 'signals',
+    type: 'btc_up_model',
+    timestamp: Date.now(),
+    pUp: view.pUp,
+    confidence: view.confidence,
+    label: view.label,
+    ready: view.ready,
+    coldStart: view.coldStart,
+    polyYes: view.polyYes,
+    edge: view.edge,
+    edgePct: view.edgePct,
+    edgeThreshold: BOT_EDGE_THRESHOLD,
+    entrySignal: view.entrySignal,
+    signals: view.signals,
+  };
+}
+
+function maybeBroadcastMicrostructure(snapshot, force = false) {
+  if (!snapshot) return;
+  const now = Date.now();
+  if (!force && now - lastMicrostructureEmitAt < MICROSTRUCTURE_BROADCAST_MS) return;
+  lastMicrostructureEmitAt = now;
+  broadcast(microstructureWirePayload(snapshot));
+}
+
+function maybeBroadcastBtcUpModel(polyYes, force = false) {
+  const now = Date.now();
+  if (!force && now - lastBtcUpModelEmitAt < MICROSTRUCTURE_BROADCAST_MS) return;
+  lastBtcUpModelEmitAt = now;
+  broadcast(btcUpModelWirePayload(polyYes));
+}
+
+function ingestBinanceTrade(timing) {
+  const trade = timing?.trade;
+  if (!trade || !Number.isFinite(trade.price) || !Number.isFinite(trade.qty)) return null;
+  return microstructureEngine.ingestTrade(trade);
+}
+
 function startBinanceFeed() {
   connectBinanceFeed((price, timing) => {
     const chainlink = getChainlinkState();
     const receivedAt = timing?.receivedAt || Date.now();
+    const snap = ingestBinanceTrade(timing);
+    maybeBroadcastMicrostructure(snap);
+    maybeBroadcastBtcUpModel(null);
     broadcastExchangePrice('binance', price, timing, {
       chainlinkPrice: Number.isFinite(chainlink.price) ? chainlink.price : undefined,
       chainlinkAgeMs: chainlink.updatedAt ? receivedAt - chainlink.updatedAt : undefined,
@@ -2256,6 +2329,19 @@ function startHttpServer() {
       return;
     }
 
+    if (req.method === 'GET' && req.url === '/api/signals/microstructure') {
+      const snapshot = microstructureEngine.getSnapshot();
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(snapshot || { signals: null, message: 'No trades yet' }));
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/api/signals/btc-up-model') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(btcUpModelWirePayload()));
+      return;
+    }
+
     if (req.method === 'GET' && req.url.startsWith('/api/btc/history')) {
       const urlQuery = req.url.includes('?') ? new URLSearchParams(req.url.split('?')[1]) : null;
       const minutes = Number(urlQuery?.get('minutes')) || 15;
@@ -2500,6 +2586,11 @@ function startHttpServer() {
       },
       portfolio: portfolioSnapshot(),
     }));
+    const microSnap = microstructureEngine.getSnapshot();
+    if (microSnap?.signals) {
+      ws.send(JSON.stringify(microstructureWirePayload(microSnap)));
+    }
+    ws.send(JSON.stringify(btcUpModelWirePayload()));
     sendStatus();
   });
 

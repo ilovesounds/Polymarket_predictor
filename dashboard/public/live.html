@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
+  <script src="/js/theme.js"></script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body data-page="live" class="live-page">
@@ -46,6 +47,7 @@
       <header class="live-hero-head">
         <div class="live-hero-head-row">
           <div class="live-hero-title">
+            <p class="live-hero-eyebrow">Active market</p>
             <h2 class="live-market-name" id="poly-market-title">Waiting for market…</h2>
           </div>
           <span id="poly-resolution" class="live-countdown resolution-pill" hidden aria-live="polite">—</span>
@@ -56,14 +58,16 @@
         </label>
       </header>
 
-      <div class="live-odds-row">
+      <div class="live-odds-row" role="group" aria-label="Market odds">
         <div class="outcome-card outcome-yes hero-outcome">
-          <span class="outcome-label">YES</span>
+          <span class="outcome-label">Yes</span>
           <span class="price-display hero-price num" id="poly-yes-price">—</span>
+          <span class="outcome-hint">Buy Yes</span>
         </div>
         <div class="outcome-card outcome-no hero-outcome">
-          <span class="outcome-label">NO</span>
+          <span class="outcome-label">No</span>
           <span class="price-display hero-price num" id="poly-no-price">—</span>
+          <span class="outcome-hint">Buy No</span>
         </div>
       </div>
 
@@ -74,13 +78,20 @@
             <div class="beat-price-hero num" id="beat-price-value">—</div>
             <span class="beat-source meta" id="beat-source">—</span>
           </div>
+          <div class="beat-metric-divider" aria-hidden="true">
+            <span class="beat-vs">vs</span>
+          </div>
           <div class="beat-metric beat-metric-spot">
-            <span class="beat-label spot-label">Current price</span>
+            <span class="beat-label spot-label">Current BTC</span>
             <div class="spot-price-hero num" id="beat-btc-now">—</div>
             <div class="beat-delta num" id="beat-delta" aria-live="polite">—</div>
           </div>
         </div>
         <div class="btc-chart-wrap btc-chart-hero">
+          <div class="btc-chart-head">
+            <span class="mini-label">BTC spot · window</span>
+            <span class="btc-chart-meta">Binance feed</span>
+          </div>
           <div id="btc-price-chart" class="btc-price-chart-lwc" role="img" aria-label="BTC live price chart"></div>
         </div>
         <div class="beat-spot-row beat-chainlink-row" id="beat-chainlink-wrap" hidden>
@@ -94,7 +105,15 @@
       <div class="trade-tape-section trade-tape-hero">
         <div class="trade-popup-host" id="trade-popup-host" aria-live="polite"></div>
         <div class="subsection">
-          <div class="subsection-label">Trade tape</div>
+          <div class="trade-tape-head">
+            <div class="subsection-label">Trade tape</div>
+            <div class="trade-tape-cols" aria-hidden="true">
+              <span>Side</span>
+              <span>Size</span>
+              <span>Price</span>
+              <span>Time</span>
+            </div>
+          </div>
           <div class="trade-tape trade-tape-live" id="trade-tape"></div>
         </div>
       </div>
@@ -114,6 +133,90 @@
         <a href="/latency" class="exchange-latency-link">Latency →</a>
       </div>
       <div class="exchange-feed-cards" id="exchange-feed-cards"></div>
+
+      <section class="microstructure-panel" id="microstructure-panel" aria-label="Binance microstructure signals">
+        <div class="microstructure-head">
+          <div class="panel-title-block">
+            <h2>Microstructure</h2>
+            <p class="market-title muted-title">Binance aggTrade · 60s window</p>
+          </div>
+          <span id="microstructure-status" class="pill pill-sm off">Waiting</span>
+        </div>
+        <div class="microstructure-cards" id="microstructure-cards">
+          <article class="micro-signal-card" data-signal="ofi">
+            <div class="micro-signal-head">
+              <span class="micro-signal-name">Order Flow Imbalance</span>
+              <span class="micro-signal-badge neutral" data-role="badge">—</span>
+            </div>
+            <div class="micro-signal-value num" data-role="value">—</div>
+            <p class="micro-signal-hint" data-role="hint">&gt;0.6 buy · &lt;0.4 sell</p>
+          </article>
+          <article class="micro-signal-card" data-signal="aggressorRatio">
+            <div class="micro-signal-head">
+              <span class="micro-signal-name">Trade Aggressor Ratio</span>
+              <span class="micro-signal-badge neutral" data-role="badge">—</span>
+            </div>
+            <div class="micro-signal-value num" data-role="value">—</div>
+            <p class="micro-signal-hint" data-role="hint">&gt;0.65 bull · &lt;0.35 bear</p>
+          </article>
+          <article class="micro-signal-card" data-signal="realizedVol30s">
+            <div class="micro-signal-head">
+              <span class="micro-signal-name">Realized Vol (30s)</span>
+              <span class="micro-signal-badge neutral" data-role="badge">—</span>
+            </div>
+            <div class="micro-signal-value num" data-role="value">—</div>
+            <p class="micro-signal-hint" data-role="hint">Spike → odds may lag</p>
+          </article>
+          <article class="micro-signal-card" data-signal="momentum60s">
+            <div class="micro-signal-head">
+              <span class="micro-signal-name">Mid Momentum (60s)</span>
+              <span class="micro-signal-badge neutral" data-role="badge">—</span>
+            </div>
+            <div class="micro-signal-value num" data-role="value">—</div>
+            <p class="micro-signal-hint" data-role="hint">Last vs 60s ago</p>
+          </article>
+          <article class="micro-signal-card micro-signal-composite" data-signal="compositeConviction">
+            <div class="micro-signal-head">
+              <span class="micro-signal-name">Composite Conviction</span>
+              <span class="micro-signal-badge neutral" data-role="badge">—</span>
+            </div>
+            <div class="micro-signal-value micro-signal-composite-value" data-role="value">—</div>
+            <p class="micro-signal-hint" data-role="hint">OFI + momentum agreement</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="btc-up-model-panel" id="btc-up-model-panel" aria-label="5-minute BTC up model">
+        <div class="btc-up-model-head">
+          <div class="panel-title-block">
+            <h2>5m BTC up model</h2>
+            <p class="market-title muted-title">P(up) vs Polymarket YES · paper only</p>
+          </div>
+          <span id="btc-up-entry-signal" class="pill pill-sm off" aria-live="polite">No edge</span>
+        </div>
+        <div class="btc-up-model-hero">
+          <div class="btc-up-metric">
+            <span class="mini-label">P(BTC up in 5m)</span>
+            <span class="btc-up-hero-value num" id="btc-up-pup">—</span>
+          </div>
+          <div class="btc-up-metric">
+            <span class="mini-label">Polymarket YES</span>
+            <span class="btc-up-hero-value num" id="btc-up-poly-yes">—</span>
+          </div>
+          <div class="btc-up-metric btc-up-metric-edge">
+            <span class="mini-label">Edge</span>
+            <span class="btc-up-hero-value num" id="btc-up-edge">—</span>
+            <span class="btc-up-edge-threshold meta" id="btc-up-edge-threshold">threshold —</span>
+          </div>
+        </div>
+        <p class="btc-up-model-label meta" id="btc-up-model-label">Waiting for Binance ticks…</p>
+        <div class="btc-up-signal-row" id="btc-up-signal-row">
+          <span class="btc-up-signal-chip" data-signal="ofi">OFI —</span>
+          <span class="btc-up-signal-chip" data-signal="aggressorRatio">Agg —</span>
+          <span class="btc-up-signal-chip" data-signal="realizedVol30s">Vol —</span>
+          <span class="btc-up-signal-chip" data-signal="momentum60s">Mom —</span>
+        </div>
+      </section>
     </aside>
   </main>
 
